@@ -1,10 +1,14 @@
 # WLW integration mini demo
 
-這是一個刻意做小、但可以實際跑通的 **contract-first、containerized batch DAG**。它把
+這是一個 **contract-first、containerized batch DAG**。它把
 `WLW_arch.png` 的甲～戊、`[A]`～`[H]` 與最終 `[I]` ROI 做成可執行範例；模型、WSI 演算法與 CLEE
-邏輯都是 deterministic mock，重點是展示「如何整合」，不是重現研究方法。
+邏輯都是 deterministic mock。
 
 ## 圖與程式的對應
+
+<div align="center">
+  <img src="https://github.com/yasaisen/WLW_GPintegrate/blob/main/doc/WLW_arch.png" alt="inference" width="700">
+</div>
 
 | 人員 | 此 demo 的 executable | 輸入 | 輸出 |
 |---|---|---|---|
@@ -14,25 +18,6 @@
 | 丙 | `interest_pattern` | C | E |
 | 丁 | `visual_filter` | E、G | H |
 | 戊 | `clee` | D、H | I：CLEE selected ROIs（核心最終產物） |
-
-執行關係如下：
-
-```text
-B report ──> 甲/report_decompose ──> D dx_pairs ───────────────┐
-                                         │                    │
-A literature ───────────────> 乙/retrieval ──> F chunks       │
-                                                │              │
-                                                v              │
-                                      甲/query_generation      │
-                                                │ G queries    │
-                                                v              v
-C WSI reference ─> 丙/interest_pattern ─> E ROIs ─> 丁/filter ─> H ─> 戊/CLEE ─> I selected ROIs
-```
-
-DRGVLM 不在核心 DAG 內；它只是讀取 I 做下游實驗的其中一個 evaluation consumer。
-
-注意 E/H 中沒有 base64 image。交換的是 `image_uri + coordinate + resolution`，因此大型
-WSI 不必在元件間複製。
 
 ## 1. 不用 Docker，先看一次完整流程
 
@@ -103,7 +88,7 @@ python3 -m unittest discover -s tests -v
 
 ## 4. Docker Compose 整合測試
 
-每位成員有自己的 Dockerfile；不是共用同一個 Python environment：
+每位成員有自己的 Dockerfile & Python environment：
 
 ```bash
 cd integration
@@ -141,5 +126,3 @@ Compose 用 `service_completed_successfully` 表達 DAG 依賴，產物會留在
 實際接入時，每個 mock 函式可被真正方法逐一替換；只要 CLI 和 A～I contracts 不變，其他
 成員與 pipeline 不需跟著重寫。
 
-由既有 CLEE metadata 反推的第一版欄位提案與尚待確認事項，整理在
-[`contracts/METADATA_DERIVED_CONTRACTS_V0_1.md`](contracts/METADATA_DERIVED_CONTRACTS_V0_1.md)。
