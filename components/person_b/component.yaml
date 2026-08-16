@@ -1,0 +1,12 @@
+name: knowledge_retrieval
+owner: person_B
+version: 0.1.0
+inputs: [A.Literature@1.0, D.DxPairs@1.0]
+outputs: [F.Chunks@1.0]
+runtime:
+  python: "3.12"
+  gpu: false
+  cpu: 1
+  memory_gb: 1
+models: []
+entrypoint: python -m components.person_b.knowledge_retrieval

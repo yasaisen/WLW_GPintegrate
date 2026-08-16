@@ -1,0 +1,7 @@
+{
+  "component_version": "person-b/knowledge-retrieval:0.1.0",
+  "top_k": 1,
+  "base_score": 0.2,
+  "score_per_keyword": 0.25
+}
+

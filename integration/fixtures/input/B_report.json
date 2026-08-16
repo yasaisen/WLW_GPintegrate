@@ -1,0 +1,15 @@
+{
+  "contract": "B.Report",
+  "schema_version": "1.0",
+  "artifact_id": "report-demo-001",
+  "case_id": "case-001",
+  "payload": {
+    "report_id": "report-001",
+    "raw_text": "Colon biopsy: invasive adenocarcinoma. Tumor grade: high-grade with necrosis.",
+    "observations": [
+      {"dx_item": "Colon biopsy", "dx_result": "invasive adenocarcinoma"},
+      {"dx_item": "Tumor grade", "dx_result": "high-grade with necrosis"}
+    ]
+  }
+}
+

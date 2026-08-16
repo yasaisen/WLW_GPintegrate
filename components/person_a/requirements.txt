@@ -1,0 +1,3 @@
+# 甲的 demo 目前只使用 Python standard library，因此沒有第三方套件。
+# 接入真實 LLM/NLP 實作時，請把直接依賴固定版本，例如：package==1.2.3。
+

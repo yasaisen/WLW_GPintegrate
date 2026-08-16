@@ -1,0 +1,5 @@
+{
+  "component_version": "person-e/clee:0.1.0",
+  "minimum_selection_score": 0.5,
+  "top_k_per_dx": 1
+}

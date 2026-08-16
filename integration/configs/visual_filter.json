@@ -1,0 +1,10 @@
+{
+  "component_version": "person-d/visual-filter:0.1.0",
+  "minimum_score": 0.5,
+  "top_k_per_query": 1,
+  "demo_attributes_by_roi_index": [
+    ["irregular glands", "desmoplastic stroma"],
+    ["geographic necrosis", "marked nuclear atypia"]
+  ]
+}
+

@@ -1,0 +1,11 @@
+name: clee
+owner: person_E
+version: 0.1.0
+inputs: [D.DxPairs@1.0, H.MatchedROIs@1.0]
+outputs: [I.CLEESelectedROIs@1.0]
+runtime:
+  python: "3.12"
+  gpu: false
+  cpu: 2
+  memory_gb: 4
+entrypoint: python -m components.person_e.clee

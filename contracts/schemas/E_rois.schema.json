@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "E.ROIs v1.0",
+  "type": "object",
+  "required": ["contract", "schema_version", "artifact_id", "case_id", "producer", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "contract": {"const": "E.ROIs"},
+    "schema_version": {"const": "1.0"},
+    "artifact_id": {"type": "string", "minLength": 1},
+    "case_id": {"type": "string", "minLength": 1},
+    "producer": {"type": "string", "minLength": 1},
+    "payload": {
+      "type": "object",
+      "required": ["rois"],
+      "additionalProperties": false,
+      "properties": {
+        "rois": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["roi_id", "case_id", "wsi_id", "image_uri", "coordinate", "resolution"],
+            "additionalProperties": false,
+            "properties": {
+              "roi_id": {"type": "string", "minLength": 1},
+              "case_id": {"type": "string", "minLength": 1},
+              "wsi_id": {"type": "string", "minLength": 1},
+              "image_uri": {"type": "string", "minLength": 1},
+              "roi_image_uri": {"type": "string", "minLength": 1},
+              "coordinate": {
+                "type": "object",
+                "required": ["x", "y", "width", "height", "level"],
+                "additionalProperties": false,
+                "properties": {
+                  "x": {"type": "integer", "minimum": 0},
+                  "y": {"type": "integer", "minimum": 0},
+                  "width": {"type": "integer", "minimum": 1},
+                  "height": {"type": "integer", "minimum": 1},
+                  "level": {"type": "integer", "minimum": 0}
+                }
+              },
+              "resolution": {
+                "type": "object",
+                "required": ["mpp", "magnification"],
+                "additionalProperties": false,
+                "properties": {
+                  "mpp": {
+                    "type": "object",
+                    "required": ["x", "y"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "x": {"type": "number", "minimum": 0},
+                      "y": {"type": "number", "minimum": 0}
+                    }
+                  },
+                  "magnification": {"type": "number", "minimum": 0}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

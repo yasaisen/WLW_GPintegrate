@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "I.CLEESelectedROIs v1.0",
+  "type": "object",
+  "required": ["contract", "schema_version", "artifact_id", "case_id", "producer", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "contract": {"const": "I.CLEESelectedROIs"},
+    "schema_version": {"const": "1.0"},
+    "artifact_id": {"type": "string", "minLength": 1},
+    "case_id": {"type": "string", "minLength": 1},
+    "producer": {"type": "string", "minLength": 1},
+    "payload": {
+      "type": "object",
+      "required": ["selected_rois"],
+      "additionalProperties": false,
+      "properties": {
+        "selected_rois": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "selection_id", "dx_pair_id", "dx_item", "dx_result", "match_id", "query_id",
+              "roi_id", "wsi_id", "image_uri", "coordinate", "resolution", "matched_attributes",
+              "match_score", "clee_score", "rank"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "selection_id": {"type": "string", "minLength": 1},
+              "dx_pair_id": {"type": "string", "minLength": 1},
+              "dx_item": {"type": "string", "minLength": 1},
+              "dx_result": {"type": "string", "minLength": 1},
+              "match_id": {"type": "string", "minLength": 1},
+              "query_id": {"type": "string", "minLength": 1},
+              "roi_id": {"type": "string", "minLength": 1},
+              "wsi_id": {"type": "string", "minLength": 1},
+              "image_uri": {"type": "string", "minLength": 1},
+              "roi_image_uri": {"type": "string", "minLength": 1},
+              "coordinate": {
+                "type": "object",
+                "required": ["x", "y", "width", "height", "level"],
+                "additionalProperties": false,
+                "properties": {
+                  "x": {"type": "integer", "minimum": 0},
+                  "y": {"type": "integer", "minimum": 0},
+                  "width": {"type": "integer", "minimum": 1},
+                  "height": {"type": "integer", "minimum": 1},
+                  "level": {"type": "integer", "minimum": 0}
+                }
+              },
+              "resolution": {
+                "type": "object",
+                "required": ["mpp", "magnification"],
+                "additionalProperties": false,
+                "properties": {
+                  "mpp": {
+                    "type": "object",
+                    "required": ["x", "y"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "x": {"type": "number", "minimum": 0},
+                      "y": {"type": "number", "minimum": 0}
+                    }
+                  },
+                  "magnification": {"type": "number", "minimum": 0}
+                }
+              },
+              "matched_attributes": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+              "match_score": {"type": "number", "minimum": 0, "maximum": 1},
+              "clee_score": {"type": "number", "minimum": 0, "maximum": 1},
+              "rank": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}

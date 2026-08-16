@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "D.DxPairs v1.0",
+  "type": "object",
+  "required": ["contract", "schema_version", "artifact_id", "case_id", "producer", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "contract": {"const": "D.DxPairs"},
+    "schema_version": {"const": "1.0"},
+    "artifact_id": {"type": "string", "minLength": 1},
+    "case_id": {"type": "string", "minLength": 1},
+    "producer": {"type": "string", "minLength": 1},
+    "payload": {
+      "type": "object",
+      "required": ["dx_pairs"],
+      "additionalProperties": false,
+      "properties": {
+        "dx_pairs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["dx_pair_id", "case_id", "source_report_id", "dx_item", "dx_result"],
+            "additionalProperties": false,
+            "properties": {
+              "dx_pair_id": {"type": "string", "minLength": 1},
+              "case_id": {"type": "string", "minLength": 1},
+              "source_report_id": {"type": "string", "minLength": 1},
+              "dx_item": {"type": "string", "minLength": 1},
+              "dx_result": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

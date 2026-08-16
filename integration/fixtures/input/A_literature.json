@@ -1,0 +1,24 @@
+{
+  "contract": "A.Literature",
+  "schema_version": "1.0",
+  "artifact_id": "literature-demo-v1",
+  "payload": {
+    "documents": [
+      {
+        "literature_id": "lit-001",
+        "title": "Morphology of invasive adenocarcinoma",
+        "text": "Irregular infiltrative glands with desmoplastic stroma support invasive adenocarcinoma.",
+        "keywords": ["adenocarcinoma", "invasive", "gland"],
+        "visual_attributes": ["irregular glands", "desmoplastic stroma"]
+      },
+      {
+        "literature_id": "lit-002",
+        "title": "Tumor necrosis in high-grade disease",
+        "text": "High-grade tumor may show geographic necrosis and marked nuclear atypia.",
+        "keywords": ["high-grade", "necrosis", "atypia"],
+        "visual_attributes": ["geographic necrosis", "marked nuclear atypia"]
+      }
+    ]
+  }
+}
+

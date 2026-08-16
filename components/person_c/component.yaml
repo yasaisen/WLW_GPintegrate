@@ -1,0 +1,15 @@
+name: interest_pattern_extraction
+owner: person_C
+version: 0.1.0
+inputs: [C.WSI@1.0]
+outputs: [E.ROIs@1.0]
+runtime:
+  python: "3.12"
+  gpu: true
+  minimum_vram_gb: 8
+  cpu: 4
+  memory_gb: 16
+models:
+  - name: demo-interest-pattern-model
+    revision: mock-v1
+entrypoint: python -m components.person_c.interest_pattern

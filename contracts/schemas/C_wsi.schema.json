@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "C.WSI v1.0",
+  "type": "object",
+  "required": ["contract", "schema_version", "artifact_id", "case_id", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "contract": {"const": "C.WSI"},
+    "schema_version": {"const": "1.0"},
+    "artifact_id": {"type": "string", "minLength": 1},
+    "case_id": {"type": "string", "minLength": 1},
+    "payload": {
+      "type": "object",
+      "required": ["wsi_id", "image_uri", "width", "height", "mpp"],
+      "additionalProperties": false,
+      "properties": {
+        "wsi_id": {"type": "string", "minLength": 1},
+        "image_uri": {"type": "string", "minLength": 1},
+        "pseudo_mask_uri": {"type": "string", "minLength": 1},
+        "stain_id": {"type": "string", "minLength": 1},
+        "stain_type": {"type": "string", "minLength": 1},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "mpp": {
+          "type": "object",
+          "required": ["x", "y"],
+          "additionalProperties": false,
+          "properties": {
+            "x": {"type": "number", "minimum": 0},
+            "y": {"type": "number", "minimum": 0}
+          }
+        }
+      }
+    }
+  }
+}

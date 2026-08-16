@@ -1,0 +1,116 @@
+name: wlw-integration-demo
+
+x-common: &common
+  user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+  volumes:
+    - ./fixtures/input:/inputs:ro
+    - ./configs:/configs:ro
+    - ./artifacts:/artifacts
+
+services:
+  report-decompose:
+    <<: *common
+    image: wlw/person-a:demo
+    build:
+      context: ..
+      dockerfile: components/person_a/Dockerfile
+    command:
+      - --input
+      - /inputs/B_report.json
+      - --output
+      - /artifacts/D_dx_pairs.json
+      - --config
+      - /configs/report_decompose.json
+
+  interest-pattern:
+    <<: *common
+    image: wlw/person-c:demo
+    build:
+      context: ..
+      dockerfile: components/person_c/Dockerfile
+    command:
+      - --input
+      - /inputs/C_wsi.json
+      - --output
+      - /artifacts/E_rois.json
+      - --config
+      - /configs/interest_pattern.json
+
+  knowledge-retrieval:
+    <<: *common
+    image: wlw/person-b:demo
+    build:
+      context: ..
+      dockerfile: components/person_b/Dockerfile
+    depends_on:
+      report-decompose:
+        condition: service_completed_successfully
+    command:
+      - --input
+      - /inputs/A_literature.json
+      - --input
+      - /artifacts/D_dx_pairs.json
+      - --output
+      - /artifacts/F_chunks.json
+      - --config
+      - /configs/knowledge_retrieval.json
+
+  query-generation:
+    <<: *common
+    image: wlw/person-a:demo
+    build:
+      context: ..
+      dockerfile: components/person_a/Dockerfile
+    entrypoint: ["python", "-m", "components.person_a.query_generation"]
+    depends_on:
+      knowledge-retrieval:
+        condition: service_completed_successfully
+    command:
+      - --input
+      - /artifacts/F_chunks.json
+      - --output
+      - /artifacts/G_queries.json
+      - --config
+      - /configs/query_generation.json
+
+  visual-filter:
+    <<: *common
+    image: wlw/person-d:demo
+    build:
+      context: ..
+      dockerfile: components/person_d/Dockerfile
+    depends_on:
+      interest-pattern:
+        condition: service_completed_successfully
+      query-generation:
+        condition: service_completed_successfully
+    command:
+      - --input
+      - /artifacts/E_rois.json
+      - --input
+      - /artifacts/G_queries.json
+      - --output
+      - /artifacts/H_matches.json
+      - --config
+      - /configs/visual_filter.json
+
+  clee:
+    <<: *common
+    image: wlw/person-e:demo
+    build:
+      context: ..
+      dockerfile: components/person_e/Dockerfile
+    depends_on:
+      report-decompose:
+        condition: service_completed_successfully
+      visual-filter:
+        condition: service_completed_successfully
+    command:
+      - --input
+      - /artifacts/D_dx_pairs.json
+      - --input
+      - /artifacts/H_matches.json
+      - --output
+      - /artifacts/I_selected_rois.json
+      - --config
+      - /configs/clee.json

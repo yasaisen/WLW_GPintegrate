@@ -1,0 +1,15 @@
+name: visual_attribute_filter
+owner: person_D
+version: 0.1.0
+inputs: [E.ROIs@1.0, G.VisualAttributeQueries@1.0]
+outputs: [H.MatchedROIs@1.0]
+runtime:
+  python: "3.12"
+  gpu: true
+  minimum_vram_gb: 12
+  cpu: 4
+  memory_gb: 16
+models:
+  - name: demo-visual-attribute-model
+    revision: mock-v1
+entrypoint: python -m components.person_d.visual_filter

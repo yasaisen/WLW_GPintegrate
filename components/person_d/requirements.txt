@@ -1,0 +1,3 @@
+# 丁的 demo 目前只使用 Python standard library，因此沒有第三方套件。
+# 接入真實 PyTorch/vision model 時，請依 CUDA 相容矩陣固定套件版本。
+

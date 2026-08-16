@@ -1,0 +1,13 @@
+name: person_a_report_and_query
+owner: person_A
+version: 0.1.0
+inputs: [B.Report@1.0, F.Chunks@1.0]
+outputs: [D.DxPairs@1.0, G.VisualAttributeQueries@1.0]
+runtime:
+  python: "3.12"
+  gpu: false
+  cpu: 1
+  memory_gb: 1
+entrypoints:
+  - python -m components.person_a.report_decompose
+  - python -m components.person_a.query_generation

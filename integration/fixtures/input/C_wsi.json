@@ -1,0 +1,16 @@
+{
+  "contract": "C.WSI",
+  "schema_version": "1.0",
+  "artifact_id": "wsi-demo-001",
+  "case_id": "case-001",
+  "payload": {
+    "wsi_id": "wsi-001",
+    "image_uri": "/data/case-001.svs",
+    "pseudo_mask_uri": "/data/case-001-pseudo-mask.svs",
+    "stain_id": "stain-he-001",
+    "stain_type": "HE",
+    "width": 80000,
+    "height": 60000,
+    "mpp": {"x": 0.5, "y": 0.5}
+  }
+}
