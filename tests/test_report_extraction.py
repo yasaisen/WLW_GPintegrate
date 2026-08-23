@@ -129,6 +129,96 @@ Gross description: Histologic Type: this must not replace the diagnosis.
             [pair["dx_item"] for pair in case["dx_pairs"]],
         )
 
+    def test_hospital_route_vghtc_is_always_regex_only(self) -> None:
+        histologic = "Invasive carcinoma of no special type (ductal)."
+        catalog = {"Histologic_Type": _definition(histologic, ["HE"])}
+
+        class ForbiddenMedGemma:
+            def extract(self, report_text: str, items: list[str]) -> dict[str, str]:
+                raise AssertionError("VGHTC must never call MedGemma")
+
+        engine = ReportExtractionEngine(catalog, {"backend": "hospital_routed"})
+        engine._medgemma = ForbiddenMedGemma()
+        case = {
+            "case_id": "case-vghtc",
+            "hospital": "VGHTC",
+            "reports": [
+                {
+                    "report_id": "report-001",
+                    "raw_text": f"1. Histologic Type: {histologic}",
+                }
+            ],
+            "dx_pairs": [],
+        }
+        engine.fill_case(case)
+        self.assertEqual(histologic, case["dx_pairs"][0]["dx_result"])
+
+    def test_cgmh_regex_miss_uses_medgemma_for_all_items(self) -> None:
+        catalog = {
+            "Histologic_Type": _definition("Model histologic type", ["HE"]),
+            "ER_status": _definition("Positive", ["ER"]),
+        }
+        requested: list[str] = []
+
+        class FakeMedGemma:
+            def extract(self, report_text: str, items: list[str]) -> dict[str, str]:
+                requested.extend(items)
+                return {
+                    "Histologic_Type": "Model histologic type",
+                    "ER_status": "Positive",
+                }
+
+        engine = ReportExtractionEngine(catalog, {"backend": "hospital_routed"})
+        engine._medgemma = FakeMedGemma()
+        case = {
+            "case_id": "case-cgmh-empty-regex",
+            "hospital": "CGMH",
+            "reports": [
+                {
+                    "report_id": "report-001",
+                    "raw_text": "Free-form diagnosis without any configured label.",
+                }
+            ],
+            "dx_pairs": [],
+        }
+        engine.fill_case(case)
+        self.assertEqual(list(catalog), requested)
+        self.assertEqual(set(catalog), {pair["dx_item"] for pair in case["dx_pairs"]})
+
+    def test_cgmh_regex_hit_keeps_regex_and_model_histologic_type(self) -> None:
+        catalog = {
+            "Histologic_Type": _definition("Model histologic type", ["HE"]),
+            "ER_status": _definition("Positive", ["ER"]),
+        }
+        requested: list[str] = []
+
+        class FakeMedGemma:
+            def extract(self, report_text: str, items: list[str]) -> dict[str, str]:
+                requested.extend(items)
+                return {"Histologic_Type": "Model histologic type"}
+
+        engine = ReportExtractionEngine(catalog, {"backend": "hospital_routed"})
+        engine._medgemma = FakeMedGemma()
+        case = {
+            "case_id": "case-cgmh-regex-hit",
+            "hospital": "CGMH",
+            "reports": [
+                {
+                    "report_id": "report-001",
+                    "raw_text": (
+                        "Histologic Type: Regex histologic type.\n"
+                        "ER status: Positive"
+                    ),
+                }
+            ],
+            "dx_pairs": [],
+        }
+        engine.fill_case(case)
+        results = {pair["dx_item"]: pair["dx_result"] for pair in case["dx_pairs"]}
+        self.assertEqual(["Histologic_Type"], requested)
+        self.assertEqual("Model histologic type", results["Histologic_Type"])
+        self.assertEqual("Positive", results["ER_status"])
+
     def test_b_report_tables_without_precomputed_results_produces_d(self) -> None:
         histologic = "Invasive carcinoma of no special type (ductal)."
         with tempfile.TemporaryDirectory() as temp_dir:

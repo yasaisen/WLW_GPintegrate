@@ -161,10 +161,11 @@ CGMH adapter 會合併 `Pathology_Report_v1.xlsx`、`Pathology_image_path_v1.csv
 `reference_wsi_ids`；原始院端表則先正規化 report、case、block、stain 與 WSI 路徑，實際
 structured-report 抽取會在甲的 extraction boundary 逐 case 執行。
 
-目前 extraction boundary 已提供兩種實作：預設 `regex` 是從 Query_Design 整理出的中榮／長庚
-欄位別名與停止規則，不需要第三方套件；`regex_then_medgemma` 會保留 regex 結果，再以
-MedGemma 補缺漏欄位。表格本身已有 `dx_item/dx_result` 時不重跑抽取。選用 MedGemma 時，
-server environment 必須另外準備 PyTorch、Transformers、GPU 與 `HF_TOKEN`，設定範例在
+預設 `hospital_routed` extraction 依醫院分流：中榮（VGHTC）完整使用 Query_Design regex，絕不
+呼叫 MedGemma；長庚（CGMH）先跑長庚 regex，完全沒有命中時才由 MedGemma 抽取全部項目，
+有任何 regex 命中時則保留 regex 結果，只請 MedGemma 抽取 Histologic Type 後合併。表格本身
+已有 `dx_item/dx_result` 時不重跑抽取。長庚 raw report 模式需要 server environment 另外準備
+PyTorch、Transformers、GPU 與 `HF_TOKEN`，設定範例在
 `components/person_a/configs/report_decompose.medgemma.example.json`。
 
 抽取文字與 `DxResultCls` 的正式類別不同時，可在 `report_extraction.result_class_map` 明確映射；

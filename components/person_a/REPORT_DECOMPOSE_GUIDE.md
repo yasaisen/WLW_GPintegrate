@@ -101,19 +101,35 @@ Excel/WSI 不應 commit 到 Git。
 pipeline 呼叫的 class。模型在同一個 Report Decompose 程序中只載入一次，不會每個 case
 重新載入。
 
-預設 demo 不載入 MedGemma。要使用時：
+表格本身已有 `dx_item/dx_result` 時不會重跑抽取，因此 canonical demo 不會載入 MedGemma。
+處理長庚 raw report 時則依下列醫院流程使用模型。要執行時：
 
 1. 在 person A 的 server image 安裝 `requirements-medgemma.txt` 所列套件，並依 server CUDA
    版本鎖定實際版本。
 2. 提供 `HF_TOKEN`。
-3. 使用 `report_decompose.medgemma.example.json`，或把正式 config 的 backend 改成
-   `regex_then_medgemma`。
+3. 使用 `report_decompose.medgemma.example.json`，正式 config 的 backend 維持
+   `hospital_routed`。
 
-三種 backend：
+正式的醫院分流規則：
 
-- `regex`：只跑確定性的 Query_Design 規則，預設值。
-- `medgemma`：只跑模型。
-- `regex_then_medgemma`：regex 先跑，模型補 regex 沒抓到的欄位。
+```text
+VGHTC（中榮）
+└── 原本的中榮 Regex → 最終抽取結果
+
+CGMH（長庚）
+└── 先跑原本的長庚 Regex
+    ├── 完全沒有抓到任何欄位
+    │   └── MedGemma 抽取全部項目 → 最終結果
+    └── 有抓到至少一個欄位
+        └── MedGemma 只抽 Histologic Type
+            └── Regex 基礎結果 + MedGemma Histologic Type → 最終結果
+```
+
+如果 MedGemma 成功回傳 Histologic Type，以模型值取代 regex 的 Histologic Type；其他 regex
+欄位原樣保留。若模型沒有回傳 Histologic Type，則保留 regex 原值。
+
+`regex`、`medgemma`、`regex_then_medgemma` 仍保留給單獨測試 backend；正式流程使用
+`hospital_routed`，避免中榮誤觸 MedGemma。
 
 ## DxResult 文字與類別
 

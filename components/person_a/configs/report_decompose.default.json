@@ -3,7 +3,7 @@
   "dx_candidates_path": "/references/DxStructuredCandidates_integrated.json",
   "report_extraction": {
     "enabled": true,
-    "backend": "regex",
+    "backend": "hospital_routed",
     "only_when_missing": true,
     "strict_result_classes": false,
     "item_name_map": {},

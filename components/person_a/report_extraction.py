@@ -171,8 +171,13 @@ class ReportExtractionEngine:
         self.catalog = catalog
         self.config = config or {}
         self.enabled = bool(self.config.get("enabled", True))
-        self.backend = self.config.get("backend", "regex")
-        if self.backend not in {"regex", "medgemma", "regex_then_medgemma"}:
+        self.backend = self.config.get("backend", "hospital_routed")
+        if self.backend not in {
+            "hospital_routed",
+            "regex",
+            "medgemma",
+            "regex_then_medgemma",
+        }:
             raise ValueError(f"Unsupported report extraction backend: {self.backend!r}")
         self.only_when_missing = bool(self.config.get("only_when_missing", True))
         self.strict_result_classes = bool(
@@ -218,7 +223,44 @@ class ReportExtractionEngine:
             self._medgemma = MedGemmaExtractor(self.config.get("medgemma", {}))
         return self._medgemma.extract(report_text, items or self._medgemma_items())
 
-    def _extract_report(self, report_text: str) -> dict[str, str]:
+    def _extract_cgmh_report(self, report_text: str) -> dict[str, str]:
+        """Implement the confirmed CGMH fallback flow.
+
+        - Regex found nothing: ask MedGemma for the complete configured item set.
+        - Regex found anything: keep those values and ask MedGemma only for
+          Histologic Type.  A non-empty model Histologic Type replaces the
+          regex Histologic Type while every other regex value is preserved.
+        """
+
+        regex_items = extract_labeled_items(report_text)
+        if not regex_items:
+            return self._medgemma_extract(report_text)
+
+        histologic_item = self._catalog_name("Histologic Type")
+        if histologic_item is None:
+            return regex_items
+        model_histologic = self._medgemma_extract(report_text, [histologic_item])
+        histologic_value = model_histologic.get(histologic_item)
+        if not histologic_value:
+            return regex_items
+
+        merged = {
+            item_name: value
+            for item_name, value in regex_items.items()
+            if self._catalog_name(item_name) != histologic_item
+        }
+        merged[histologic_item] = histologic_value
+        return merged
+
+    def _extract_report(self, report_text: str, hospital: str) -> dict[str, str]:
+        if self.backend == "hospital_routed":
+            if hospital == "VGHTC":
+                # VGHTC is deliberately regex-only.  Never load MedGemma here.
+                return extract_labeled_items(report_text)
+            if hospital == "CGMH":
+                return self._extract_cgmh_report(report_text)
+            raise ValueError(f"Unsupported hospital for report extraction: {hospital!r}")
+
         regex_items = extract_labeled_items(report_text) if self.backend != "medgemma" else {}
         if self.backend == "regex":
             return regex_items
@@ -270,7 +312,9 @@ class ReportExtractionEngine:
 
         extracted_by_item: dict[str, dict[str, str]] = {}
         for report in case["reports"]:
-            for extracted_name, raw_value in self._extract_report(report["raw_text"]).items():
+            for extracted_name, raw_value in self._extract_report(
+                report["raw_text"], case.get("hospital", "")
+            ).items():
                 item_name = self._catalog_name(extracted_name)
                 if item_name is None or item_name in extracted_by_item:
                     continue
