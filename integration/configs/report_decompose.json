@@ -1,4 +1,12 @@
 {
-  "component_version": "person-a/report-decompose:0.3.0",
-  "dx_candidates_path": "/home/yasaisen/Desktop/27_research/research_main_v3/lab_19/DxStructuredCandidates_integrated.json"
+  "component_version": "person-a/report-decompose:0.4.0",
+  "dx_candidates_path": "/references/DxStructuredCandidates_integrated.json",
+  "report_extraction": {
+    "enabled": true,
+    "backend": "regex",
+    "only_when_missing": true,
+    "strict_result_classes": false,
+    "item_name_map": {},
+    "result_class_map": {}
+  }
 }

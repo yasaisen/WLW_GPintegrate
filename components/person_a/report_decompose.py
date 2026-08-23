@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from components.person_a.reference_data import load_dx_candidates
+from components.person_a.report_extraction import ReportExtractionEngine
 from components.person_a.table_parsers import parse_report_tables
 from contracts.runtime import cli_parser, load_config, load_inputs, write_artifact
 
@@ -31,7 +32,10 @@ def _reference_wsi_ids(
 
 
 def _metadata_case(
-    case: dict[str, Any], sample_idx: int, catalog: dict[str, Any]
+    case: dict[str, Any],
+    sample_idx: int,
+    catalog: dict[str, Any],
+    strict_result_classes: bool,
 ) -> dict[str, Any]:
     dx_items: dict[str, dict[str, Any]] = {}
     for pair in case["dx_pairs"]:
@@ -49,7 +53,7 @@ def _metadata_case(
         definition = catalog[item_name]
         result = pair["dx_result"]
         allowed_results = definition["DxResultCls"]
-        if result not in allowed_results:
+        if strict_result_classes and result not in allowed_results:
             raise ValueError(
                 f"Case {case['case_id']!r} {item_name} result {result!r} is not in "
                 "DxStructuredCandidates_integrated.json"
@@ -58,8 +62,8 @@ def _metadata_case(
             "dx_pair_id": pair["dx_pair_id"],
             "source_report_id": pair["source_report_id"],
             "DxResultCls": result,
-            "DxResultTxt": result,
-            "DxResultRawTxt": result,
+            "DxResultTxt": pair.get("dx_result_text", result),
+            "DxResultRawTxt": pair.get("dx_result_raw_text", result),
             "referenceBlock": None,
             "referenceType": list(definition.get("referenceType", [])),
             "referenceWSI": _reference_wsi_ids(pair, case["wsis"], definition),
@@ -135,9 +139,11 @@ def main() -> None:
     if not parsed.cases:
         raise ValueError("Report Decompose produced no cases containing both report and WSI data")
 
+    extraction = ReportExtractionEngine(catalog, config.get("report_extraction"))
     index_entries = []
     used_directories: set[str] = set()
     for sample_idx, case in enumerate(parsed.cases):
+        extraction.fill_case(case)
         case_id = case["case_id"]
         directory_name = _case_directory_name(case_id)
         if directory_name in used_directories:
@@ -155,7 +161,14 @@ def main() -> None:
                 "data_mode": "inference",
                 "DxItem_list": list(catalog),
                 "reference_versions": {"dx_candidates": candidate_provenance},
-                "case_list": [_metadata_case(case, sample_idx, catalog)],
+                "case_list": [
+                    _metadata_case(
+                        case,
+                        sample_idx,
+                        catalog,
+                        extraction.strict_result_classes,
+                    )
+                ],
             },
         }
         write_artifact(artifact, artifact_path, "D.DxPairs")

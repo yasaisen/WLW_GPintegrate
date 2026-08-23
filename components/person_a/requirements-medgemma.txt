@@ -1,0 +1,7 @@
+# Optional production backend. Pin versions to the CUDA/PyTorch image validated
+# on the target server before deployment; the regex/default demo does not
+# install these heavyweight packages.
+torch
+transformers
+accelerate
+bitsandbytes

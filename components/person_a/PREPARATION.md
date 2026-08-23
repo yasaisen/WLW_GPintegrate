@@ -18,6 +18,8 @@ F v2.0 能產生 G v2.0。integration layer 不應 import 你的內部 class。
 | 要準備的項目 | 放置位置 | 說明 |
 |---|---|---|
 | Report Decompose 實作 | `components/person_a/report_decompose.py` | 保留 `--input/--output/--config` CLI；一次處理多 table/case |
+| Report extraction | `components/person_a/report_extraction.py` | Query_Design regex 的逐報告函式；不直接讀 Excel、不自行寫最終 JSON |
+| Optional MedGemma | `components/person_a/medgemma_extractor.py` | 只在 config 選用時載入模型；同一程序內快取模型 |
 | Hospital table parsers | `components/person_a/table_parsers.py` | 依 `table_type` 解析 VGHTC/CGMH，統一為 reports + WSIs |
 | XLSX reader | `components/person_a/xlsx_reader.py` | 只讀取工作表欄位/值，不複製原始 Excel |
 | Query Generation 實作 | `components/person_a/query_generation.py` | 讀 D/F、寫 G，不直接讀乙的程式或資料庫內部物件 |
@@ -51,7 +53,11 @@ suffix 規則誤刪時間尾段。Windows-style source paths 也必須先正規�
 
 DxItem 的 `referenceWSI[]` 指定對應 WSI；來源有明示 ID 時以明示內容為準，否則依 catalog 的
 `referenceType` 選染色（例如 HE），連 `referenceType` 都沒有時才預設全部 WSI。raw hospital
-report 沒有結構化結果時可合法輸出空 `DxItems`，正式報告分解/NLP 接在甲的 extraction boundary。
+report 沒有預先填入結果時，`report_extraction.py` 會在 extraction boundary 逐份報告抽取；完全
+沒有命中時仍可合法輸出空 `DxItems`，讓 run manifest 與人工稽核能看見該 case。
+
+Report Decompose 的資料流、設定與切換 MedGemma 方法見
+[`REPORT_DECOMPOSE_GUIDE.md`](REPORT_DECOMPOSE_GUIDE.md)。
 
 每個 pair 必須有穩定 ID，不可只靠 list index：
 

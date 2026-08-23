@@ -159,7 +159,18 @@ B 是整批執行的來源 manifest，結構如下；`table_path` 可指向單�
 CGMH adapter 會合併 `Pathology_Report_v1.xlsx`、`Pathology_image_path_v1.csv`、
 `CGMH_list_total.xlsx` 與 `data_path`。標準化 CSV/XLSX 可提供 `dx_item`、`dx_result` 與
 `reference_wsi_ids`；原始院端表則先正規化 report、case、block、stain 與 WSI 路徑，實際
-structured-report 模型可在甲的 extraction boundary 接入。
+structured-report 抽取會在甲的 extraction boundary 逐 case 執行。
+
+目前 extraction boundary 已提供兩種實作：預設 `regex` 是從 Query_Design 整理出的中榮／長庚
+欄位別名與停止規則，不需要第三方套件；`regex_then_medgemma` 會保留 regex 結果，再以
+MedGemma 補缺漏欄位。表格本身已有 `dx_item/dx_result` 時不重跑抽取。選用 MedGemma 時，
+server environment 必須另外準備 PyTorch、Transformers、GPU 與 `HF_TOKEN`，設定範例在
+`components/person_a/configs/report_decompose.medgemma.example.json`。
+
+抽取文字與 `DxResultCls` 的正式類別不同時，可在 `report_extraction.result_class_map` 明確映射；
+整合階段預設 `strict_result_classes: false`，會保留原始抽取文字，不會因尚未分類而中斷整批。
+部署前若要強制所有結果屬於候選類別，將它改成 `true`。完整接線說明見
+[`components/person_a/REPORT_DECOMPOSE_GUIDE.md`](components/person_a/REPORT_DECOMPOSE_GUIDE.md)。
 
 DxItem 合法值與欄位預設值在執行時讀取 lab_19 的
 `DxStructuredCandidates_integrated.json`。若來源沒有明示 WSI：`referenceType` 有指定時選該染色
