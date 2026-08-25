@@ -39,16 +39,23 @@ F v2.0 能產生 G v2.0。integration layer 不應 import 你的內部 class。
 B 是 run-level 來源 manifest，payload 的 `tables[]` 只放 `table_idx/table_type/table_path`；
 它不屬於單一 case，所以 envelope 不放 `case_id`。
 
-`table_path` 指向 raw-data directory 時，VGHTC parser 會 join 病理報告 Excel、WSI 總表與
-`data_path`；CGMH parser 會 join 病理報告 Excel、影像路徑 CSV、染色總表與 `data_path`。
-WSI filename 可能含 `15.33.07` 這類掃描時間，實作只能移除已知 WSI 副檔名，不可直接用一般
-suffix 規則誤刪時間尾段。Windows-style source paths 也必須先正規化成 container 可用的 separator。
+新預設 `wsi_discovery.mode=case_directory_he`：`table_path` 只負責指出掛載後的院別報告目錄，
+VGHTC/CGMH parser 從其中的 Excel 讀取報告與 `case_id`；WSI 則另外從掛載後的
+`/data/wsi/<case_id>/` 遞迴尋找檔名或子目錄含 `HE`/`H01` 的檔案。也就是以中榮的`病理序號`
+或長庚的 `Path_ID` 作為 `case_id`（對話中統稱 `record_id`），再拿同一個 ID 找 WSI 資料夾。
+若 WSI 根目錄先分院別，可透過
+`hospital_subdirectories` 設定。
+
+block 會優先由資料夾或檔名中 case ID 後的片段判斷；判斷不到時明確寫成 `UNSPECIFIED`。
+等院方提供正式檔名規則後，可用 `block_pattern` 指定正規表示式。舊 WSI 清單表的 join 邏輯仍保留
+在 `legacy_tables` 模式，但不是新預設。Windows-style source paths 也必須先正規化成 container
+可用的 separator。
 
 ### D.DxPairs
 
 每個 per-case D 使用 `payload.case_list[0]`。報告原文在 `report_raw_content`，DxPair 在
-`structured_report.DxItems`，WSI 在 `tissue_blocks[].stains[]`，其中 `filepath` 就是 report table
-帶入的 `wsi_path`。合法 DxItem 及其預設欄位每次執行都由
+`structured_report.DxItems`，掃描找到的 WSI 在 `tissue_blocks[].stains[]`，其中 `filepath` 是
+容器內可讀的 `/data/wsi/...` 路徑。合法 DxItem 及其預設欄位每次執行都由
 `DxStructuredCandidates_integrated.json` 載入。
 
 DxItem 的 `referenceWSI[]` 指定對應 WSI；來源有明示 ID 時以明示內容為準，否則依 catalog 的

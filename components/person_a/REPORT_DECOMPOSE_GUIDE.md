@@ -9,11 +9,12 @@ pipeline 對每個 case 重複呼叫。
 ```text
 B_report_tables.json
 └── tables[]
-    ├── VGHTC table/file/directory
-    └── CGMH table/file/directory
-            │
-            ▼
-table_parsers.py：Excel/CSV → reports + WSIs，依 case_id 分組
+    ├── /data/reports/VGHTC → 報告 Excel → reports + case_id
+    └── /data/reports/CGMH  → 報告 Excel → reports + case_id
+                                           │
+/data/wsi/<case_id>/...HE... ──────────────┤
+                                           ▼
+table_parsers.py：依 case_id 把報告與 HE WSI 合在一起
             │
             ▼
 report_extraction.py：每份 report raw text → DxItem + raw result
@@ -46,33 +47,121 @@ report_decompose.py：補 candidate metadata/referenceWSI，寫出 D
       {
         "table_idx": 0,
         "table_type": "VGHTC2024",
-        "table_path": "/data/report/VGHTC"
+        "table_path": "/data/reports/VGHTC"
       },
       {
         "table_idx": 1,
         "table_type": "CGMH2019",
-        "table_path": "/data/report/CGMH"
+        "table_path": "/data/reports/CGMH"
       }
     ]
   }
 }
 ```
 
-相對路徑以 `B_report_tables.json` 所在資料夾為基準；正式 server/Docker 建議使用容器內固定路徑，
-例如把 host 的共用資料目錄唯讀掛載成 `/data/report`，再讓 B 使用 `/data/report/...`。真實院方
-Excel/WSI 不應 commit 到 Git。
+正式執行時，B 本身也放在外部的報告資料目錄，不放進 repository。B 裡寫的是 Docker **裡面**
+看得到的路徑，不是某一台電腦的 `D:\...`。Compose 把不同電腦的實際位置統一映成
+`/data/reports`，因此 B 不必跟著每台電腦修改。
+
+## 正式資料如何 mount
+
+建議先在 Docker 外面整理成：
+
+```text
+D:\WLW_data\
+├── reports\
+│   ├── B_report_tables.json
+│   ├── VGHTC\
+│   │   ├── 乳癌病理報告_240927.xlsx
+│   │   └── 乳癌病理報告_241220.xlsx
+│   └── CGMH\
+│       └── Pathology_Report_v1.xlsx
+└── wsi\
+    ├── <case_id_1>\
+    │   ├── <case_id_1>_A_HE.mrxs
+    │   └── <case_id_1>_B_HE.mrxs
+    └── <case_id_2>\
+        └── HE\slide.svs
+```
+
+這只是建議的 host 目錄；資料真正放哪裡可由每台電腦自行決定。把
+`integration/.env.example` 複製成 `integration/.env`，再填該電腦的路徑：
+
+```dotenv
+REPORT_ROOT=D:/WLW_data/reports
+WSI_ROOT=D:/WLW_data/wsi
+REPORT_TABLES_INPUT=/data/reports/B_report_tables.json
+```
+
+可把 `integration/fixtures/input/B_report_tables.mounted.example.json` 複製到
+`<REPORT_ROOT>/B_report_tables.json` 當起點，再依實際院別資料夾修改 `table_path`。正式 B 放在
+repository 外面，因此不會跟著 push。
+
+`integration/.env` 不會被 Git 追蹤。Compose 的兩個唯讀 mount 是：
+
+```yaml
+volumes:
+  - "${REPORT_ROOT}:/data/reports:ro"
+  - "${WSI_ROOT}:/data/wsi:ro"
+```
+
+白話來說，mount 只是替資料開兩扇門：
+
+- Docker 外的 `REPORT_ROOT`，在 Docker 裡改名看成 `/data/reports`。
+- Docker 外的 `WSI_ROOT`，在 Docker 裡改名看成 `/data/wsi`。
+- `:ro` 表示程式只能讀，不能修改院方原始資料。
+- mount 不會自動把報告和 WSI 配在一起；配對工作由 `table_parsers.py` 完成。
+
+所以不同電腦只需修改各自不會上傳的 `.env`，B 和程式裡永遠使用相同的容器路徑。GitHub 的
+`integration/fixtures/input/` 仍保留少量假 case，目的是讓任何人 clone 後能測試格式與程式，並不
+代表正式資料也要上傳。
+
+## 目前 WSI 配對規則
+
+這版依目前與學長確認到的資訊實作：
+
+1. Excel 中的院方識別欄位作為 `case_id`（中榮是 `病理序號`，長庚是 `Path_ID`；對話中的
+   `record_id` 是對這類識別欄位的統稱）。
+2. 對每個有報告的 case，到 `/data/wsi/<case_id>/` 找它的 WSI。
+3. 遞迴尋找 `.mrxs`、`.ndpi`、`.svs`、`.tif`、`.tiff`。
+4. 只收檔名或相對子目錄含 `HE` 或 `H01` 的檔案，並在 D 中統一標成 `HE`。
+5. 同一 case 可以有多張 HE；全部保留，再依 block 分組。
+6. block 優先從子目錄或檔名中的片段判斷；判斷不出來就填 `UNSPECIFIED`，不憑空猜測。
+
+例如：
+
+```text
+/data/wsi/CASE001/CASE001A,H01,130103.mrxs → case CASE001、block A、HE
+/data/wsi/CASE001/B/HE/slide.svs            → case CASE001、block B、HE
+/data/wsi/CASE001/HE/slide.svs              → case CASE001、block UNSPECIFIED、HE
+```
+
+若實際目錄是 `/data/wsi/VGHTC/<case_id>/` 與 `/data/wsi/CGMH/<case_id>/`，在 config 加：
+
+```json
+"hospital_subdirectories": {
+  "VGHTC": "VGHTC",
+  "CGMH": "CGMH"
+}
+```
+
+若學長之後提供「檔名後綴如何表示 block」的精確規則，可以在 config 加 `block_pattern`；程式支援
+一個命名為 `block` 的 capture group 或第一個 capture group。這是仍需用真實 WSI 檔名確認的部分，
+不影響 report 與 case 先依 `case_id` 配對。
 
 ### `table_parsers.py`
 
 這層只做資料整理，不做診斷文字抽取：
 
 1. 根據 `table_type` 選擇中榮或長庚 adapter。
-2. 讀取病理報告、WSI 總表、染色、block 與路徑。
-3. 依 `case_id` 合併成 `reports[]` 和 `wsis[]`。
-4. 缺 report 或 WSI 的 case 寫入 D index 的 `skipped_cases`。
+2. 從掛載的報告目錄讀取病理報告 Excel。
+3. 用報告的 `case_id` 到另一個掛載的 WSI 根目錄尋找 HE/H01 檔案。
+4. 依 `case_id` 合併成 `reports[]` 和 `wsis[]`。
+5. 缺 report 或 WSI 的 case 寫入 D index 的 `skipped_cases`。
 
 標準化 CSV/XLSX 若已有 `dx_item/dx_result`，parser 也會帶入，主要用於測試或已完成結構化的
-資料來源。
+資料來源。若必須沿用舊的 WSI 清單表，可把 `wsi_discovery.mode` 改成 `legacy_tables`；新正式流程
+使用 `case_directory_he`。
 
 ### `report_extraction.py`
 
@@ -163,10 +252,19 @@ D 需要同時保留：
 
 ```bash
 python3 -m components.person_a.report_decompose \
-  --input /inputs/B_report_tables.json \
+  --input /data/reports/B_report_tables.json \
   --output /artifacts/D_dx_pairs_index.json \
   --config /configs/report_decompose.json
 ```
+
+使用 Compose 時不需要手動輸入上述容器路徑；在 `integration` 目錄執行：
+
+```bash
+docker compose up --build --abort-on-container-failure
+```
+
+Compose 會讀取同目錄的 `.env`，自動完成 report 與 WSI mount。若不建立 `.env`，它會改用 GitHub
+內的假 fixture，方便執行 demo。
 
 執行完先檢查：
 

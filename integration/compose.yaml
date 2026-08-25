@@ -6,6 +6,8 @@ x-common: &common
     - ./fixtures/input:/inputs:ro
     - ./configs:/configs:ro
     - ./artifacts:/artifacts
+    - "${REPORT_ROOT:-./fixtures/input}:/data/reports:ro"
+    - "${WSI_ROOT:-./fixtures/input}:/data/wsi:ro"
     - ../../../lab_19/DxStructuredCandidates_integrated.json:/references/DxStructuredCandidates_integrated.json:ro
     - ../../../lab_19/reference/candidateReference.json:/references/candidateReference.json:ro
     - ../../Histologic_Type_mappingTable.json:/references/Histologic_Type_mappingTable.json:ro
@@ -36,7 +38,7 @@ services:
       dockerfile: components/person_a/Dockerfile
     command:
       - --input
-      - /inputs/B_report_tables.json
+      - "${REPORT_TABLES_INPUT:-/inputs/B_report_tables.json}"
       - --output
       - /artifacts/D_dx_pairs_index.json
       - --config

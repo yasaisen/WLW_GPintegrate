@@ -2,4 +2,12 @@ __pycache__/
 *.py[cod]
 integration/artifacts/*.json
 integration/artifacts-local/
+.env
+integration/.env
+integration/fixtures/input/tables/*
+*.mrxs
+*.ndpi
+*.svs
+*.tif
+*.tiff
 
