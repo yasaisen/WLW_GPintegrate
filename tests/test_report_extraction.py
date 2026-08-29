@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from components.person_a.medgemma_extractor import _chunks, _json_object
+from components.person_a.medgemma_extractor import _canonical_key
 from components.person_a.report_extraction import (
     ReportExtractionEngine,
     extract_labeled_items,
@@ -93,6 +94,16 @@ Gross description: Histologic Type: this must not replace the diagnosis.
         self.assertEqual(
             {"Histologic_Type": "IC"},
             _json_object('```json\n{"Histologic_Type": "IC"}\n```'),
+        )
+        self.assertEqual(
+            _canonical_key("Histologic_Type"), _canonical_key("Histologic Type")
+        )
+        self.assertEqual(
+            {"Histologic_Type": "IC"},
+            _json_object(
+                'Example: {"ignored": true}\nAnswer: '
+                '{"Histologic_Type": "IC"}\nDone.'
+            ),
         )
 
     def test_hybrid_backend_asks_model_only_for_regex_misses(self) -> None:

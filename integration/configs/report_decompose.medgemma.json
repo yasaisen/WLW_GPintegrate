@@ -22,6 +22,8 @@
       "token_env": "HF_TOKEN",
       "require_cuda": true,
       "load_in_4bit": true,
+      "enable_cpu_offload": true,
+      "device_map_strategy": "text_gpu_vision_cpu",
       "compute_dtype": "auto",
       "chunk_chars": 3000,
       "overlap": 300,

@@ -22,7 +22,9 @@ def _environment() -> dict[str, object]:
         raise RuntimeError("CUDA is not available inside the MedGemma container")
     properties = torch.cuda.get_device_properties(0)
     native_bf16 = properties.major >= 8 and torch.cuda.is_bf16_supported()
-    compute_dtype = torch.bfloat16 if native_bf16 else torch.float16
+    compute_dtype = (
+        torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    )
     BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -56,7 +58,9 @@ def _environment() -> dict[str, object]:
         "compute_capability": f"{properties.major}.{properties.minor}",
         "torch_bf16_supported": torch.cuda.is_bf16_supported(),
         "native_bf16_supported": native_bf16,
-        "selected_compute_dtype": "bfloat16" if native_bf16 else "float16",
+        "selected_compute_dtype": (
+            "bfloat16" if torch.cuda.is_bf16_supported() else "float16"
+        ),
         "medgemma_transformers_api": (
             f"{AutoProcessor.__name__}+{AutoModelForImageTextToText.__name__}"
         ),
@@ -83,11 +87,31 @@ def main() -> None:
         from components.person_a.medgemma_extractor import MedGemmaExtractor
 
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
-        extractor = MedGemmaExtractor(config["report_extraction"]["medgemma"])
+        medgemma_config = dict(config["report_extraction"]["medgemma"])
+        medgemma_config["max_input_tokens"] = min(
+            int(medgemma_config.get("max_input_tokens", 512)), 512
+        )
+        medgemma_config["max_new_tokens"] = min(
+            int(medgemma_config.get("max_new_tokens", 96)), 96
+        )
+        medgemma_config["capture_generation_diagnostics"] = True
+        extractor = MedGemmaExtractor(medgemma_config)
         result["generation"] = extractor.extract(
             "Histologic Type: invasive carcinoma of no special type.",
             ["Histologic_Type"],
         )
+        result["generation_diagnostics"] = {
+            "input_tokens": extractor.last_input_length,
+            "output_tokens": extractor.last_output_length,
+            "new_token_ids": extractor.last_generation_token_ids[:16],
+            "first_step_logits": extractor.last_logits_diagnostics,
+        }
+        if not result["generation"].get("Histologic_Type"):
+            raise RuntimeError(
+                "MedGemma loaded but did not extract Histologic_Type"
+            )
+        if not extractor.last_logits_diagnostics.get("all_finite"):
+            raise RuntimeError("MedGemma generation produced non-finite logits")
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 

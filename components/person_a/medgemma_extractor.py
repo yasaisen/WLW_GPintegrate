@@ -44,14 +44,22 @@ def _chunks(text: str, chunk_chars: int, overlap: int) -> list[str]:
 
 def _json_object(generated_text: str) -> dict[str, Any]:
     cleaned = re.sub(r"```(?:json)?", "", generated_text, flags=re.IGNORECASE)
-    for block in reversed(re.findall(r"\{[\s\S]*\}", cleaned)):
+    decoder = json.JSONDecoder()
+    objects: list[dict[str, Any]] = []
+    for start, character in enumerate(cleaned):
+        if character != "{":
+            continue
         try:
-            value = json.loads(block)
+            value, _ = decoder.raw_decode(cleaned[start:])
         except json.JSONDecodeError:
             continue
         if isinstance(value, dict):
-            return value
-    return {}
+            objects.append(value)
+    return objects[-1] if objects else {}
+
+
+def _canonical_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value).casefold())
 
 
 class MedGemmaExtractor:
@@ -64,10 +72,24 @@ class MedGemmaExtractor:
         self.max_input_tokens = int(self.config.get("max_input_tokens", 4096))
         self.max_new_tokens = int(self.config.get("max_new_tokens", 1200))
         self.load_in_4bit = bool(self.config.get("load_in_4bit", True))
+        self.enable_cpu_offload = bool(
+            self.config.get("enable_cpu_offload", False)
+        )
+        self.device_map_strategy = str(
+            self.config.get("device_map_strategy", "auto")
+        )
         self.require_cuda = bool(self.config.get("require_cuda", True))
         self.compute_dtype = str(self.config.get("compute_dtype", "auto"))
+        self.capture_generation_diagnostics = bool(
+            self.config.get("capture_generation_diagnostics", False)
+        )
         self.processor: Any | None = None
         self.model: Any | None = None
+        self.last_generated_text = ""
+        self.last_generation_token_ids: list[int] = []
+        self.last_input_length = 0
+        self.last_output_length = 0
+        self.last_logits_diagnostics: dict[str, Any] = {}
 
     @staticmethod
     def _native_bf16_available(torch: Any) -> bool:
@@ -80,17 +102,18 @@ class MedGemmaExtractor:
         if self.compute_dtype == "float16":
             return torch.float16
         if self.compute_dtype == "bfloat16":
-            if not self._native_bf16_available(torch):
+            if not torch.cuda.is_bf16_supported():
                 raise RuntimeError(
                     "MedGemma compute_dtype=bfloat16 was requested, but this GPU "
-                    "does not provide native bfloat16 compute; use auto or float16"
+                    "is not supported by PyTorch for bfloat16 compute; use auto "
+                    "or float16"
                 )
             return torch.bfloat16
         if self.compute_dtype != "auto":
             raise ValueError(
                 "MedGemma compute_dtype must be auto, float16 or bfloat16"
             )
-        if self._native_bf16_available(torch):
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
             return torch.bfloat16
         if torch.cuda.is_available():
             return torch.float16
@@ -135,58 +158,118 @@ class MedGemmaExtractor:
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_compute_dtype=dtype,
                 bnb_4bit_use_double_quant=True,
+                # Despite its historical name, Transformers also checks this
+                # flag when a 4-bit device map must leave modules on CPU.
+                llm_int8_enable_fp32_cpu_offload=self.enable_cpu_offload,
+            )
+
+        if self.device_map_strategy == "auto":
+            device_map: str | dict[str, str | int] = "auto"
+        elif self.device_map_strategy == "text_gpu_vision_cpu":
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    "device_map_strategy=text_gpu_vision_cpu requires CUDA"
+                )
+            # Report Decompose supplies report text, not pixels.  Keep the
+            # text model and output head on the GPU, while the currently
+            # unused vision path remains in host RAM.  Keeping each complete
+            # quantized subtree on one device also avoids unsupported 4-bit
+            # layer-by-layer CPU dispatch.
+            device_map = {
+                "model.vision_tower": "cpu",
+                "model.multi_modal_projector": "cpu",
+                "model.language_model": 0,
+                "lm_head": 0,
+            }
+        else:
+            raise ValueError(
+                "MedGemma device_map_strategy must be auto or "
+                "text_gpu_vision_cpu"
             )
 
         self.processor = AutoProcessor.from_pretrained(self.model_id, token=token)
+        self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token
         self.model = AutoModelForImageTextToText.from_pretrained(
             self.model_id,
             token=token,
             quantization_config=quantization,
-            device_map="auto",
-            torch_dtype=dtype,
+            device_map=device_map,
+            dtype=dtype,
             low_cpu_mem_usage=True,
         )
+        self.model.config.pad_token_id = self.processor.tokenizer.pad_token_id
         self.model.eval()
 
     def _extract_chunk(self, chunk: str, items: list[str]) -> dict[str, str]:
         self._load()
         import torch
 
+        system = (
+            "You are a pathology information extractor. Use ONLY the provided "
+            "report text. Return ONLY one valid JSON object. Do not explain. "
+            "If an item is not stated, output an empty string."
+        )
         keys = "\n".join(f'- "{item}"' for item in items)
-        prompt_text = (
-            "You are a pathology information extractor. Use only the provided "
-            "report. Return only one valid JSON object with exactly the keys "
-            "listed below. Use an empty string when an item is not stated.\n\n"
-            f"Keys:\n{keys}\n\nPathology report:\n\"\"\"{chunk}\"\"\""
+        user = (
+            "Fill these fields from the pathology report. Return ONLY JSON "
+            "with exactly these keys. Use \"\" if not mentioned.\n\n"
+            f"Keys:\n{keys}\n\nReport:\n\"\"\"{chunk}\"\"\""
         )
         messages = [
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": prompt_text}],
-            }
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
         ]
-        prompt = self.processor.apply_chat_template(
+        tokenizer = self.processor.tokenizer
+        prompt_text = tokenizer.apply_chat_template(
             messages, add_generation_prompt=True, tokenize=False
         )
-        encoded = self.processor(
-            text=prompt,
+        encoded = tokenizer(
+            prompt_text,
             return_tensors="pt",
             truncation=True,
             max_length=self.max_input_tokens,
         )
-        encoded = encoded.to(self.model.device)
+        language_device = getattr(self.model, "hf_device_map", {}).get(
+            "model.language_model", self.model.device
+        )
+        if isinstance(language_device, int):
+            language_device = f"cuda:{language_device}"
+        encoded = encoded.to(language_device)
         input_length = encoded["input_ids"].shape[-1]
         with torch.inference_mode():
             output = self.model.generate(
                 **encoded,
                 max_new_tokens=self.max_new_tokens,
                 do_sample=False,
+                eos_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id,
+                return_dict_in_generate=self.capture_generation_diagnostics,
+                output_logits=self.capture_generation_diagnostics,
             )
-        generated = self.processor.decode(
-            output[0][input_length:], skip_special_tokens=True
+        if self.capture_generation_diagnostics:
+            sequences = output.sequences
+            first_logits = output.logits[0]
+            finite = torch.isfinite(first_logits)
+            self.last_logits_diagnostics = {
+                "all_finite": bool(finite.all()),
+                "nan_count": int(torch.isnan(first_logits).sum()),
+                "inf_count": int(torch.isinf(first_logits).sum()),
+                "top_token_ids": torch.topk(first_logits[0], 5).indices.tolist(),
+            }
+        else:
+            sequences = output
+        generated = tokenizer.decode(
+            sequences[0][input_length:], skip_special_tokens=True
         )
+        self.last_input_length = input_length
+        self.last_output_length = sequences[0].shape[-1]
+        self.last_generation_token_ids = sequences[0][input_length:].tolist()
+        self.last_generated_text = generated
         parsed = _json_object(generated)
-        return {item: _clean(parsed.get(item)) for item in items}
+        normalized = {_canonical_key(key): value for key, value in parsed.items()}
+        return {
+            item: _clean(normalized.get(_canonical_key(item))) for item in items
+        }
 
     def extract(self, report_text: str, items: list[str]) -> dict[str, str]:
         gross = re.search(

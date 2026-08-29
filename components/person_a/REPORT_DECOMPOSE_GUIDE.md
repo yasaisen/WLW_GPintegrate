@@ -226,7 +226,8 @@ CGMH（長庚）
 `components/person_a/Dockerfile.medgemma-base` 固定 PyTorch/CUDA、Transformers、Accelerate 與
 bitsandbytes 重量環境，再由 `components/person_a/Dockerfile.medgemma` 加入本專案程式。這樣只改
 Python 程式時不必重新下載數 GB 套件。模型使用 4-bit NF4 載入，避免把 4B 模型完整以 16/32-bit
-放進顯存。
+放進顯存。4 GB 顯示卡使用 `text_gpu_vision_cpu`：文字模型放 GPU，Report Decompose 用不到的
+影像模組留在主記憶體；`compute_dtype: auto` 會選擇 PyTorch 在該 GPU 上實際支援的計算型別。
 
 先登入 Hugging Face，在 `google/medgemma-1.5-4b-it` 頁面接受使用條款，建立 read token，再把
 token 寫入不會上傳的 `integration/.env`：
@@ -252,6 +253,10 @@ docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml 
 ```powershell
 docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml run --rm medgemma-runtime-check --load-model
 ```
+
+成功時輸出必須同時出現 `"status": "ok"`、非空的 `generation.Histologic_Type`，以及
+`generation_diagnostics.first_step_logits.all_finite: true`。只有下載到模型不算完成；這個檢查會讓
+模型實際讀一小段病理文字並生成結果。
 
 最後單獨跑 B → D：
 
