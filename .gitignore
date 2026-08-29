@@ -5,6 +5,7 @@ integration/artifacts-local/
 .env
 integration/.env
 integration/fixtures/input/tables/*
+integration/fixtures/input/B_report_tables.local.json
 *.mrxs
 *.ndpi
 *.svs
