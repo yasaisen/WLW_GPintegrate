@@ -1,0 +1,8 @@
+ARG MEDGEMMA_BASE_IMAGE=wlw/person-a:medgemma-base
+FROM ${MEDGEMMA_BASE_IMAGE}
+
+COPY contracts /app/contracts
+COPY components/person_a /app/components/person_a
+RUN touch /app/components/__init__.py
+
+ENTRYPOINT ["python", "-m", "components.person_a.report_decompose"]

@@ -220,6 +220,55 @@ CGMH（長庚）
 `regex`、`medgemma`、`regex_then_medgemma` 仍保留給單獨測試 backend；正式流程使用
 `hospital_routed`，避免中榮誤觸 MedGemma。
 
+## 長庚正式 MedGemma GPU 環境
+
+一般 demo 的 `components/person_a/Dockerfile` 仍是零模型、CPU 版本。長庚正式抽取先由
+`components/person_a/Dockerfile.medgemma-base` 固定 PyTorch/CUDA、Transformers、Accelerate 與
+bitsandbytes 重量環境，再由 `components/person_a/Dockerfile.medgemma` 加入本專案程式。這樣只改
+Python 程式時不必重新下載數 GB 套件。模型使用 4-bit NF4 載入，避免把 4B 模型完整以 16/32-bit
+放進顯存。
+
+先登入 Hugging Face，在 `google/medgemma-1.5-4b-it` 頁面接受使用條款，建立 read token，再把
+token 寫入不會上傳的 `integration/.env`：
+
+```dotenv
+HF_TOKEN=hf_你的read_token
+HF_CACHE_ROOT=D:/WLW_models/huggingface
+```
+
+`HF_TOKEN` 是下載受條款保護模型的鑰匙；`HF_CACHE_ROOT` 是 Docker 外面的模型快取。第一次下載後，
+後續容器會重用相同檔案，不必把模型包進 image 或 Git。
+
+在 repository 根目錄建立並檢查 GPU 環境（不下載模型）：
+
+```powershell
+docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml build medgemma-base
+docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml build report-decompose
+docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml run --rm medgemma-runtime-check
+```
+
+填好 token 並接受條款後，再做一次真正的模型下載、4-bit 載入和短文字生成：
+
+```powershell
+docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml run --rm medgemma-runtime-check --load-model
+```
+
+最後單獨跑 B → D：
+
+```powershell
+docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml run --rm report-decompose
+```
+
+兩份 Compose 檔會合併：`compose.yaml` 提供 report、WSI、config、candidate 與 artifact mounts；
+`compose.medgemma.yaml` 只把 `report-decompose` 換成 GPU image、加入模型快取、傳入 token，並保留
+`hospital_routed`。因此中榮仍只跑 Regex，長庚才會依既定條件載入 MedGemma。
+
+若要整條靜態 integration DAG，將最後的 `run --rm report-decompose` 改成：
+
+```powershell
+docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml up --build --abort-on-container-failure
+```
+
 ## DxResult 文字與類別
 
 抽取器先得到報告中的原始文字，例如：

@@ -8,7 +8,7 @@ x-common: &common
     - ./artifacts:/artifacts
     - "${REPORT_ROOT:-./fixtures/input}:/data/reports:ro"
     - "${WSI_ROOT:-./fixtures/input}:/data/wsi:ro"
-    - ../../../lab_19/DxStructuredCandidates_integrated.json:/references/DxStructuredCandidates_integrated.json:ro
+    - "${DX_CANDIDATES_PATH:-../../../lab_19/DxStructuredCandidates_integrated.json}:/references/DxStructuredCandidates_integrated.json:ro"
     - ../../../lab_19/reference/candidateReference.json:/references/candidateReference.json:ro
     - ../../Histologic_Type_mappingTable.json:/references/Histologic_Type_mappingTable.json:ro
     - ../../[typeLevel]visualAttrs_v1.2.1_2603241656.json:/references/[typeLevel]visualAttrs_v1.2.1_2603241656.json:ro

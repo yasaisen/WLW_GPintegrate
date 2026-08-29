@@ -1,0 +1,18 @@
+name: person_a_report_decompose_medgemma
+owner: person_A
+version: 0.5.0
+inputs: [B.ReportTables@1.0]
+outputs: [D.DxPairsIndex@1.0, D.DxPairs@2.0]
+runtime:
+  image: wlw/person-a:medgemma
+  base_image: wlw/person-a:medgemma-base
+  base_dockerfile: components/person_a/Dockerfile.medgemma-base
+  dockerfile: components/person_a/Dockerfile.medgemma
+  python: "3.11"
+  gpu: true
+  gpu_count: 1
+  quantization: bitsandbytes-nf4-4bit
+  model_cache: /models/huggingface
+entrypoints:
+  environment_check: python -m components.person_a.medgemma_smoke
+  report_decompose: python -m components.person_a.report_decompose

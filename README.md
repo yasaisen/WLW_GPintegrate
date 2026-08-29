@@ -170,8 +170,9 @@ B 是整批執行的來源 manifest，結構如下；`table_path` 可指向單�
 呼叫 MedGemma；長庚（CGMH）先跑長庚 regex，完全沒有命中時才由 MedGemma 抽取全部項目，
 有任何 regex 命中時則保留 regex 結果，只請 MedGemma 抽取 Histologic Type 後合併。表格本身
 已有 `dx_item/dx_result` 時不重跑抽取。長庚 raw report 模式需要 server environment 另外準備
-PyTorch、Transformers、GPU 與 `HF_TOKEN`，設定範例在
-`components/person_a/configs/report_decompose.medgemma.example.json`。
+PyTorch、Transformers、GPU 與 `HF_TOKEN`。正式 GPU image、Compose override 與環境／模型 smoke
+test 已放在 `components/person_a/Dockerfile.medgemma`、`integration/compose.medgemma.yaml` 與
+`components/person_a/medgemma_smoke.py`；執行方式見 Report Decompose 整合說明。
 
 抽取文字與 `DxResultCls` 的正式類別不同時，可在 `report_extraction.result_class_map` 明確映射；
 整合階段預設 `strict_result_classes: false`，會保留原始抽取文字，不會因尚未分類而中斷整批。

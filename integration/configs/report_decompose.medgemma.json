@@ -1,5 +1,5 @@
 {
-  "component_version": "person-a/report-decompose:0.4.0-medgemma",
+  "component_version": "person-a/report-decompose:0.5.0-medgemma",
   "dx_candidates_path": "/references/DxStructuredCandidates_integrated.json",
   "wsi_discovery": {
     "mode": "case_directory_he",
