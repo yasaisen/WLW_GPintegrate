@@ -77,7 +77,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--config",
-        default="/configs/report_decompose.medgemma.json",
+        default="/app/components/person_a/configs/report_decompose.default.json",
         help="Report Decompose config used by --load-model",
     )
     args = parser.parse_args()

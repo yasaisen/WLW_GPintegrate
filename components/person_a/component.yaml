@@ -1,13 +1,23 @@
 name: person_a_report_and_query
 owner: person_A
-version: 0.4.0
+version: 0.5.0
 inputs: [B.ReportTables@1.0, D.DxPairs@2.0, F.Chunks@2.0]
 outputs: [D.DxPairsIndex@1.0, D.DxPairs@2.0, G.VisualAttributeQueries@2.0]
 runtime:
-  python: "3.12"
-  gpu: false
-  cpu: 1
-  memory_gb: 1
+  python: "3.11"
+  cpu: 2
+  memory_gb: 4
+  gpu: true
+  gpu_count: 1
+  gpu_vram_gb: 4
+  cuda: "12.4"
+  torch: "2.6.0+cu124"
+  transformers: "5.16.1"
+  model_id: google/medgemma-1.5-4b-it
+  model_revision: 91850547d9f0b2fdd21aa7c5f4f3d1a8a52c243b
+  quantization: bitsandbytes-nf4-4bit
+  model_cache_mount: /models/huggingface
 entrypoints:
   - python -m components.person_a.report_decompose
   - python -m components.person_a.query_generation
+  - python -m components.person_a.medgemma_smoke

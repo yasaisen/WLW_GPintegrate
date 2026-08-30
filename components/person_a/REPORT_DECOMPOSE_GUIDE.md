@@ -1,346 +1,162 @@
-# Report Decompose 整合說明
+# Person A：Report Decompose 實作說明
 
-## 這一塊負責什麼
+本文件只說明 `components/person_a` 的責任。中央 `integration/compose.yaml`、pipeline controller、
+contracts 與其他成員元件不由 Person A 自行修改。
 
-甲的 Report Decompose 一次接收一份 run-level `B.ReportTables`，讀取其中全部 table source，
-把資料依 `case_id` 分組，再為每個 case 產生一份 `D.DxPairs`。整個元件只執行一次，不是由
-pipeline 對每個 case 重複呼叫。
-
-```text
-B_report_tables.json
-└── tables[]
-    ├── /data/reports/VGHTC → 報告 Excel → reports + case_id
-    └── /data/reports/CGMH  → 報告 Excel → reports + case_id
-                                           │
-/data/wsi/<case_id>/...HE... ──────────────┤
-                                           ▼
-table_parsers.py：依 case_id 把報告與 HE WSI 合在一起
-            │
-            ▼
-report_extraction.py：每份 report raw text → DxItem + raw result
-            │
-            ▼
-report_decompose.py：補 candidate metadata/referenceWSI，寫出 D
-            │
-            ├── D_dx_pairs_index.json
-            ├── cases/case-001/D_dx_pairs.json
-            ├── cases/case-002/D_dx_pairs.json
-            └── ...
-```
-
-`pipeline/run_pipeline.py` 的迴圈從這裡才開始：它讀取 `D_dx_pairs_index.json`，將每一份 D
-分別送往 F/G/E/H/I。pipeline 的迴圈不會重做 Report Decompose。
-
-## 各檔案的責任
-
-### `B_report_tables.json`
-
-只放來源清單，不放 Excel 內容，也不放分解答案：
-
-```json
-{
-  "contract": "B.ReportTables",
-  "schema_version": "1.0",
-  "artifact_id": "hospital-run-001",
-  "payload": {
-    "tables": [
-      {
-        "table_idx": 0,
-        "table_type": "VGHTC2024",
-        "table_path": "/data/reports/VGHTC"
-      },
-      {
-        "table_idx": 1,
-        "table_type": "CGMH2019",
-        "table_path": "/data/reports/CGMH"
-      }
-    ]
-  }
-}
-```
-
-正式執行時，B 本身也放在外部的報告資料目錄，不放進 repository。B 裡寫的是 Docker **裡面**
-看得到的路徑，不是某一台電腦的 `D:\...`。Compose 把不同電腦的實際位置統一映成
-`/data/reports`，因此 B 不必跟著每台電腦修改。
-
-## 正式資料如何 mount
-
-建議先在 Docker 外面整理成：
+## 執行邊界
 
 ```text
-D:\WLW_data\
-├── reports\
-│   ├── B_report_tables.json
-│   ├── VGHTC\
-│   │   ├── 乳癌病理報告_240927.xlsx
-│   │   └── 乳癌病理報告_241220.xlsx
-│   └── CGMH\
-│       └── Pathology_Report_v1.xlsx
-└── wsi\
-    ├── <case_id_1>\
-    │   ├── <case_id_1>_A_HE.mrxs
-    │   └── <case_id_1>_B_HE.mrxs
-    └── <case_id_2>\
-        └── HE\slide.svs
+B.ReportTables
+  -> table_parsers：依 GitHub 既有規則讀 VGHTC／CGMH raw tables
+  -> report_extraction：逐份報告抽取診斷欄位
+  -> report_decompose：組成並驗證 D index 與 per-case D
 ```
 
-這只是建議的 host 目錄；資料真正放哪裡可由每台電腦自行決定。把
-`integration/.env.example` 複製成 `integration/.env`，再填該電腦的路徑：
-
-```dotenv
-REPORT_ROOT=D:/WLW_data/reports
-WSI_ROOT=D:/WLW_data/wsi
-REPORT_TABLES_INPUT=/data/reports/B_report_tables.json
-```
-
-可把 `integration/fixtures/input/B_report_tables.mounted.example.json` 複製到
-`<REPORT_ROOT>/B_report_tables.json` 當起點，再依實際院別資料夾修改 `table_path`。正式 B 放在
-repository 外面，因此不會跟著 push。
-
-`integration/.env` 不會被 Git 追蹤。Compose 的兩個唯讀 mount 是：
-
-```yaml
-volumes:
-  - "${REPORT_ROOT}:/data/reports:ro"
-  - "${WSI_ROOT}:/data/wsi:ro"
-```
-
-白話來說，mount 只是替資料開兩扇門：
-
-- Docker 外的 `REPORT_ROOT`，在 Docker 裡改名看成 `/data/reports`。
-- Docker 外的 `WSI_ROOT`，在 Docker 裡改名看成 `/data/wsi`。
-- `:ro` 表示程式只能讀，不能修改院方原始資料。
-- mount 不會自動把報告和 WSI 配在一起；配對工作由 `table_parsers.py` 完成。
-
-所以不同電腦只需修改各自不會上傳的 `.env`，B 和程式裡永遠使用相同的容器路徑。GitHub 的
-`integration/fixtures/input/` 仍保留少量假 case，目的是讓任何人 clone 後能測試格式與程式，並不
-代表正式資料也要上傳。
-
-## 目前 WSI 配對規則
-
-這版依目前與學長確認到的資訊實作：
-
-1. Excel 中的院方識別欄位作為 `case_id`（中榮是 `病理序號`，長庚是 `Path_ID`；對話中的
-   `record_id` 是對這類識別欄位的統稱）。
-2. 對每個有報告的 case，到 `/data/wsi/<case_id>/` 找它的 WSI。
-3. 遞迴尋找 `.mrxs`、`.ndpi`、`.svs`、`.tif`、`.tiff`。
-4. 只收檔名或相對子目錄含 `HE` 或 `H01` 的檔案，並在 D 中統一標成 `HE`。
-5. 同一 case 可以有多張 HE；全部保留，再依 block 分組。
-6. block 優先從子目錄或檔名中的片段判斷；判斷不出來就填 `UNSPECIFIED`，不憑空猜測。
-
-例如：
+對外介面維持 GitHub 規定的 CLI：
 
 ```text
-/data/wsi/CASE001/CASE001A,H01,130103.mrxs → case CASE001、block A、HE
-/data/wsi/CASE001/B/HE/slide.svs            → case CASE001、block B、HE
-/data/wsi/CASE001/HE/slide.svs              → case CASE001、block UNSPECIFIED、HE
+python -m components.person_a.report_decompose \
+  --input <B.ReportTables.json> \
+  --output <D.DxPairsIndex.json> \
+  --config <report_decompose.default.json>
 ```
 
-若實際目錄是 `/data/wsi/VGHTC/<case_id>/` 與 `/data/wsi/CGMH/<case_id>/`，在 config 加：
+integration layer 只需要知道 CLI、B／D contracts 與 exit code，不需要 import Person A 的 Python
+class。
 
-```json
-"hospital_subdirectories": {
-  "VGHTC": "VGHTC",
-  "CGMH": "CGMH"
-}
-```
+## B 與院端資料
 
-若學長之後提供「檔名後綴如何表示 block」的精確規則，可以在 config 加 `block_pattern`；程式支援
-一個命名為 `block` 的 capture group 或第一個 capture group。這是仍需用真實 WSI 檔名確認的部分，
-不影響 report 與 case 先依 `case_id` 配對。
+B 的 `payload.tables[]` 仍只包含：
 
-### `table_parsers.py`
+- `table_idx`
+- `table_type`：`VGHTC2024` 或 `CGMH2019`
+- `table_path`：單一標準化 CSV/XLSX，或掛載後的院端 raw-data directory
 
-這層只做資料整理，不做診斷文字抽取：
+既有 parser 行為維持不變：
 
-1. 根據 `table_type` 選擇中榮或長庚 adapter。
-2. 從掛載的報告目錄讀取病理報告 Excel。
-3. 用報告的 `case_id` 到另一個掛載的 WSI 根目錄尋找 HE/H01 檔案。
-4. 依 `case_id` 合併成 `reports[]` 和 `wsis[]`。
-5. 缺 report 或 WSI 的 case 寫入 D index 的 `skipped_cases`。
+- VGHTC directory：讀兩份病理報告 Excel、`VGHTC_list_total_2.xlsx` 與 `data_path`。
+- CGMH directory：讀 `Pathology_Report_v1.xlsx`、`Pathology_image_path_v1.csv`、
+  `CGMH_list_total.xlsx` 與 `data_path`。
+- 標準化表格：直接讀 `report_text`、`wsi_path`、`stain_type`、`block_id`、`dx_item` 與
+  `dx_result` 等欄位。
 
-標準化 CSV/XLSX 若已有 `dx_item/dx_result`，parser 也會帶入，主要用於測試或已完成結構化的
-資料來源。若必須沿用舊的 WSI 清單表，可把 `wsi_discovery.mode` 改成 `legacy_tables`；新正式流程
-使用 `case_directory_he`。
+報告、WSI、candidate JSON 與模型權重都留在 Git repository 外；Docker 執行時由使用者或整合
+負責人以唯讀 mount 提供。B 內的路徑必須是容器看得到的路徑，不是某位成員的 Windows home
+directory。
 
-### `report_extraction.py`
+## 報告抽取規則
 
-這是由 Query_Design 整理出的可重用 extraction boundary。與舊腳本不同，它：
-
-- 不寫死 Excel 路徑。
-- 不使用 Pandas 重新讀整批表格。
-- 不在 import 時直接執行。
-- 一次只接收 parser 已整理好的 report text。
-- 遇到 `Gross description:` 就停止，避免從 gross section 誤抓結果。
-- 支援中榮／長庚既有欄位名稱與別名。
-- 同一 case 同一 DxItem 只保留第一個非空結果。
-
-`Histologic Type` 和 catalog 的 `Histologic_Type` 這類空格／底線差異會自動對應；無法自動對應
-時，在 config 的 `item_name_map` 指定：
-
-```json
-"item_name_map": {
-  "Her-2/neu status": "HER2_Status"
-}
-```
-
-### `medgemma_extractor.py`
-
-它把原本 `medgemma_extract.py` 的模型載入、chunk、JSON 解析與 first-nonempty merge 改成可由
-pipeline 呼叫的 class。模型在同一個 Report Decompose 程序中只載入一次，不會每個 case
-重新載入。
-
-表格本身已有 `dx_item/dx_result` 時不會重跑抽取，因此 canonical demo 不會載入 MedGemma。
-處理長庚 raw report 時則依下列醫院流程使用模型。要執行時：
-
-1. 在 person A 的 server image 安裝 `requirements-medgemma.txt` 所列套件，並依 server CUDA
-   版本鎖定實際版本。
-2. 提供 `HF_TOKEN`。
-3. 使用 `report_decompose.medgemma.example.json`，正式 config 的 backend 維持
-   `hospital_routed`。
-
-正式的醫院分流規則：
+正式 config 使用 `hospital_routed`：
 
 ```text
-VGHTC（中榮）
-└── 原本的中榮 Regex → 最終抽取結果
+VGHTC
+└─ 只使用 Query_Design Regex，不呼叫 MedGemma
 
-CGMH（長庚）
-└── 先跑原本的長庚 Regex
-    ├── 完全沒有抓到任何欄位
-    │   └── MedGemma 抽取全部項目 → 最終結果
-    └── 有抓到至少一個欄位
-        └── MedGemma 只抽 Histologic Type
-            └── Regex 基礎結果 + MedGemma Histologic Type → 最終結果
+CGMH
+└─ 先使用 Query_Design Regex
+   ├─ 完全沒有命中：MedGemma 抽取全部 configured DxItems
+   └─ 有任何命中：保留 Regex 結果，MedGemma 只補 Histologic Type
 ```
 
-如果 MedGemma 成功回傳 Histologic Type，以模型值取代 regex 的 Histologic Type；其他 regex
-欄位原樣保留。若模型沒有回傳 Histologic Type，則保留 regex 原值。
+表格已提供 `dx_item/dx_result` 時，`only_when_missing: true` 會保留既有結果，不重新抽取。
 
-`regex`、`medgemma`、`regex_then_medgemma` 仍保留給單獨測試 backend；正式流程使用
-`hospital_routed`，避免中榮誤觸 MedGemma。
+`strict_result_classes: true` 會要求 `DxResultCls` 存在於
+`DxStructuredCandidates_integrated.json`。模型或 Regex 的原始文字保留在 `DxResultRawTxt` 與
+`DxResultTxt`；若原始文字不是候選類別，必須在 `result_class_map` 明確映射，不能自行放寬 contract。
 
-## 長庚正式 MedGemma GPU 環境
+## 標準 Person A 檔案
 
-一般 demo 的 `components/person_a/Dockerfile` 仍是零模型、CPU 版本。長庚正式抽取先由
-`components/person_a/Dockerfile.medgemma-base` 固定 PyTorch/CUDA、Transformers、Accelerate 與
-bitsandbytes 重量環境，再由 `components/person_a/Dockerfile.medgemma` 加入本專案程式。這樣只改
-Python 程式時不必重新下載數 GB 套件。模型使用 4-bit NF4 載入，避免把 4B 模型完整以 16/32-bit
-放進顯存。4 GB 顯示卡使用 `text_gpu_vision_cpu`：文字模型放 GPU，Report Decompose 用不到的
-影像模組留在主記憶體；`compute_dtype: auto` 會選擇 PyTorch 在該 GPU 上實際支援的計算型別。
+- `Dockerfile`：Person A 唯一正式 container recipe。
+- `requirements.txt`：固定 Transformers、Accelerate、bitsandbytes 與 sentencepiece 版本；
+  PyTorch CUDA wheel 固定在 Dockerfile。
+- `component.yaml`：記錄 Python、CUDA、GPU/VRAM、模型 revision 與 entrypoints。
+- `configs/report_decompose.default.json`：B -> D 正式預設設定。
+- `configs/query_generation.default.json`：D + F -> G 正式預設設定。
+- `report_extraction.py`：Regex、醫院分流與結果類別映射。
+- `medgemma_extractor.py`：MedGemma adapter；同一程序只載入一次模型。
+- `medgemma_smoke.py`：GPU、4-bit 與真模型短生成檢查。
 
-先登入 Hugging Face，在 `google/medgemma-1.5-4b-it` 頁面接受使用條款，建立 read token，再把
-token 寫入不會上傳的 `integration/.env`：
+## 不用 Docker 執行 Regex／測試資料
 
-```dotenv
-HF_TOKEN=hf_你的read_token
-HF_CACHE_ROOT=D:/WLW_models/huggingface
-```
-
-`HF_TOKEN` 是下載受條款保護模型的鑰匙；`HF_CACHE_ROOT` 是 Docker 外面的模型快取。第一次下載後，
-後續容器會重用相同檔案，不必把模型包進 image 或 Git。
-
-在 repository 根目錄建立並檢查 GPU 環境（不下載模型）：
+在 repository 根目錄：
 
 ```powershell
-docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml build medgemma-base
-docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml build report-decompose
-docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml run --rm medgemma-runtime-check
+python -m components.person_a.report_decompose `
+  --input integration/fixtures/input/B_report_tables.json `
+  --output integration/artifacts-local/D_dx_pairs_index.json `
+  --config components/person_a/configs/report_decompose.default.json
 ```
 
-填好 token 並接受條款後，再做一次真正的模型下載、4-bit 載入和短文字生成：
+fixture 已有結構化結果，因此不需要載入 MedGemma。正式 raw CGMH 報告才會依分流規則使用模型。
+
+## 建立與單獨執行 Person A Docker image
+
+在 repository 根目錄建立 GitHub 規定的 Person A Dockerfile：
 
 ```powershell
-docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml run --rm medgemma-runtime-check --load-model
+docker build -f components/person_a/Dockerfile -t wlw/person-a:0.5.0 .
 ```
 
-成功時輸出必須同時出現 `"status": "ok"`、非空的 `generation.Histologic_Type`，以及
-`generation_diagnostics.first_step_logits.all_finite: true`。只有下載到模型不算完成；這個檢查會讓
-模型實際讀一小段病理文字並生成結果。
-
-最後單獨跑 B → D：
+以下是單獨執行 B -> D 的示意；實際 host 路徑由執行機器決定：
 
 ```powershell
-docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml run --rm report-decompose
+docker run --rm --gpus all `
+  -e HF_TOKEN `
+  -e HF_HOME=/models/huggingface `
+  -v "D:/WLW_data/raw:/data/raw:ro" `
+  -v "D:/WLW_data/wsi:/data/wsi:ro" `
+  -v "D:/WLW_reference/DxStructuredCandidates_integrated.json:/references/DxStructuredCandidates_integrated.json:ro" `
+  -v "D:/WLW_models/huggingface:/models/huggingface" `
+  -v "D:/WLW_output:/outputs" `
+  wlw/person-a:0.5.0 `
+  --input /data/raw/B_report_tables.json `
+  --output /outputs/D_dx_pairs_index.json `
+  --config /app/components/person_a/configs/report_decompose.default.json
 ```
 
-兩份 Compose 檔會合併：`compose.yaml` 提供 report、WSI、config、candidate 與 artifact mounts；
-`compose.medgemma.yaml` 只把 `report-decompose` 換成 GPU image、加入模型快取、傳入 token，並保留
-`hospital_routed`。因此中榮仍只跑 Regex，長庚才會依既定條件載入 MedGemma。
+raw directory 內的 B 可將 `table_path` 寫成 `/data/raw/VGHTC` 與 `/data/raw/CGMH`；院端
+`data_path` 必須指向容器內的 WSI mount，例如 `/data/wsi`。中央 Compose 如何提供相同 mounts，
+由 integration 負責人接線。
 
-若要整條靜態 integration DAG，將最後的 `run --rm report-decompose` 改成：
+## MedGemma 環境檢查
+
+先只檢查 GPU／套件／4-bit：
 
 ```powershell
-docker compose -f integration/compose.yaml -f integration/compose.medgemma.yaml up --build --abort-on-container-failure
+docker run --rm --gpus all `
+  --entrypoint python `
+  wlw/person-a:0.5.0 `
+  -m components.person_a.medgemma_smoke
 ```
 
-## DxResult 文字與類別
+需要真正載入模型時，另外傳入 token 與外部模型快取：
 
-抽取器先得到報告中的原始文字，例如：
-
-```text
-Invasive carcinoma of no special type (ductal).
+```powershell
+docker run --rm --gpus all `
+  -e HF_TOKEN `
+  -v "D:/WLW_models/huggingface:/models/huggingface" `
+  --entrypoint python `
+  wlw/person-a:0.5.0 `
+  -m components.person_a.medgemma_smoke --load-model
 ```
 
-D 需要同時保留：
+成功條件包含：
 
-- `DxResultRawTxt`：報告原始抽取文字。
-- `DxResultTxt`：目前使用的可讀文字。
-- `DxResultCls`：供後續元件使用的正式類別。
+- `status` 是 `ok`。
+- `generation.Histologic_Type` 非空。
+- `generation_diagnostics.first_step_logits.all_finite` 是 `true`。
 
-若抽取文字已等於 candidate catalog 的類別，程式會自動使用 catalog 中的正式大小寫。若不同，
-可在 config 明確映射：
+## 交付前驗證
 
-```json
-"result_class_map": {
-  "Histologic_Type": {
-    "Invasive ductal carcinoma": "Invasive breast carcinoma of no special type"
-  }
-}
+```powershell
+python -m unittest tests.test_report_extraction tests.test_report_tables
+python -m unittest discover -s tests -v
 ```
 
-整合與資料檢查期間建議 `strict_result_classes: false`，未映射文字仍會寫入 D，不會讓整批中斷；
-正式上線且 mapping 完整後可改成 `true`，任何不合法類別都會立即報錯。
+必須確認：
 
-## 執行
-
-```bash
-python3 -m components.person_a.report_decompose \
-  --input /data/reports/B_report_tables.json \
-  --output /artifacts/D_dx_pairs_index.json \
-  --config /configs/report_decompose.json
-```
-
-使用 Compose 時不需要手動輸入上述容器路徑；在 `integration` 目錄執行：
-
-```bash
-docker compose up --build --abort-on-container-failure
-```
-
-Compose 會讀取同目錄的 `.env`，自動完成 report 與 WSI mount。若不建立 `.env`，它會改用 GitHub
-內的假 fixture，方便執行 demo。
-
-執行完先檢查：
-
-1. `D_dx_pairs_index.json` 的 `cases[]` 和 `skipped_cases[]`。
-2. 每個 `cases/<case_id>/D_dx_pairs.json` 的 `report_raw_content`。
-3. `structured_report.DxItems` 是否有抽取結果。
-4. 每個 DxItem 的 `referenceWSI[]` 是否選到正確染色切片。
-
-## 測試
-
-`tests/test_report_extraction.py` 包含一個沒有預填 `dx_item/dx_result` 的 B table，會真正走完：
-
-```text
-B table → regex extraction → D index → per-case D → schema validation
-```
-
-執行：
-
-```bash
-python3 -m unittest tests.test_report_extraction -v
-```
-
-完整 pipeline 測試另外需要 repository 外部的 lab_19 candidate/visual reference 檔案；在獨立 clone
-沒有掛載這些 references 時，原專案的 pipeline/reference tests 會因缺檔失敗，這不是 extraction
-程式本身的錯誤。
+- B -> D index／per-case D 通過 schema validation。
+- VGHTC 絕不呼叫 MedGemma。
+- CGMH 依 Regex 命中情況呼叫 MedGemma。
+- 缺 input、candidate、模型權限或 GPU 時以 non-zero exit code 失敗。
+- Git 變更不包含 `.env`、token、報告、WSI、candidate 真實檔案或模型權重。

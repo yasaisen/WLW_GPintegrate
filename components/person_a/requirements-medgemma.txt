@@ -1,6 +1,0 @@
-# Optional production backend.  PyTorch/CUDA is pinned by Dockerfile.medgemma-base;
-# these are the exact userspace versions validated with that image.
-transformers==5.16.1
-accelerate==1.14.0
-bitsandbytes==0.50.1
-sentencepiece==0.2.1

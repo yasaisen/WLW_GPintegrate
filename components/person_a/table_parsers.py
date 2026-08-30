@@ -227,11 +227,7 @@ def _match_case_id(filename: str, case_ids: list[str]) -> tuple[str, str] | None
 
 
 def _parse_vghtc_directory(
-    source_dir: Path,
-    table_idx: int,
-    cases: dict[str, dict[str, Any]],
-    *,
-    include_legacy_wsi: bool = True,
+    source_dir: Path, table_idx: int, cases: dict[str, dict[str, Any]]
 ) -> None:
     source_case_ids: set[str] = set()
     report_paths = sorted(source_dir.glob("乳癌病理報告_*.xlsx"))
@@ -251,9 +247,6 @@ def _parse_vghtc_directory(
                     table_idx,
                     f"{report_path.name}:{sheet_name}:{row_number}",
                 )
-
-    if not include_legacy_wsi:
-        return
 
     case_ids = sorted(source_case_ids, key=len, reverse=True)
     data_paths = _read_data_paths(source_dir)
@@ -280,17 +273,13 @@ def _parse_vghtc_directory(
 
 
 def _parse_cgmh_directory(
-    source_dir: Path,
-    table_idx: int,
-    cases: dict[str, dict[str, Any]],
-    *,
-    include_legacy_wsi: bool = True,
+    source_dir: Path, table_idx: int, cases: dict[str, dict[str, Any]]
 ) -> None:
     source_case_ids: set[str] = set()
     report_path = source_dir / "Pathology_Report_v1.xlsx"
     for sheet_name, row_number, record in iter_xlsx_records(report_path):
         case_id = _first(record, ["Path_ID"])
-        report_text = _first(record, ["pathology_report", "病理報告"])
+        report_text = _first(record, ["pathology_report"])
         if case_id and report_text:
             source_case_ids.add(case_id)
             case = _case(cases, case_id, "CGMH")
@@ -301,9 +290,6 @@ def _parse_cgmh_directory(
                 table_idx,
                 f"{report_path.name}:{sheet_name}:{row_number}",
             )
-
-    if not include_legacy_wsi:
-        return
 
     data_paths = _read_data_paths(source_dir)
     base_root = Path(data_paths[0]) if data_paths else source_dir
@@ -342,134 +328,6 @@ def _parse_cgmh_directory(
                 stains_by_filename.get(filename_key, "UNKNOWN"),
                 str(directory / filename),
                 block_id,
-            )
-
-
-def _normalized_token(value: str) -> str:
-    return re.sub(r"[^A-Z0-9]", "", value.upper())
-
-
-def _path_tokens(path: Path) -> list[str]:
-    tokens: list[str] = []
-    for part in path.parts:
-        stem = Path(part).stem
-        tokens.extend(token for token in re.split(r"[^A-Za-z0-9]+", stem) if token)
-    return tokens
-
-
-def _is_he_path(path: Path, case_directory: Path, he_tokens: set[str]) -> bool:
-    relative = path.relative_to(case_directory)
-    return any(_normalized_token(token) in he_tokens for token in _path_tokens(relative))
-
-
-def _block_id_from_he_path(
-    path: Path,
-    case_directory: Path,
-    case_id: str,
-    he_tokens: set[str],
-    block_pattern: re.Pattern[str] | None,
-    default_block_id: str,
-) -> str:
-    relative = path.relative_to(case_directory)
-    if block_pattern is not None:
-        match = block_pattern.search(relative.as_posix())
-        if match:
-            if "block" in match.groupdict():
-                return match.group("block")
-            if match.groups():
-                return match.group(1)
-            raise ValueError("wsi_discovery.block_pattern must capture a block value")
-
-    # Prefer a meaningful directory between <case_id>/ and the file.  This
-    # supports both <case>/A/HE/file and <case>/HE/A/file layouts.
-    for part in relative.parent.parts:
-        compact = _normalized_token(part)
-        if compact and compact not in he_tokens and compact != _normalized_token(case_id):
-            return part
-
-    # Hospital exports commonly use names such as
-    # CASE001A,H01,130103.mrxs or CASE001_A_HE.mrxs.  In both forms the first
-    # suffix token after the case id is the block id.
-    stem = path.stem
-    if stem.casefold().startswith(case_id.casefold()):
-        tail = stem[len(case_id) :].strip(" _,-")
-        for token in re.split(r"[^A-Za-z0-9]+", tail):
-            if not token:
-                continue
-            if _normalized_token(token) in he_tokens:
-                break
-            return token
-
-    return default_block_id
-
-
-def _case_directory(case_id: str, root: Path, hospital_subdirectory: str) -> Path:
-    if Path(case_id).name != case_id or any(separator in case_id for separator in ("/", "\\")):
-        raise ValueError(f"case_id cannot be used as a WSI directory name: {case_id!r}")
-    return root / _portable_path(hospital_subdirectory) / case_id
-
-
-def _attach_case_directory_he_wsis(
-    cases: dict[str, dict[str, Any]],
-    config: dict[str, Any],
-    manifest_directory: Path,
-) -> None:
-    pending = [case for case in cases.values() if case["reports"] and not case["wsis"]]
-    if not pending:
-        return
-
-    root_value = _text(config.get("root"))
-    if not root_value:
-        raise ValueError("wsi_discovery.root is required for case_directory_he mode")
-    root = _portable_path(os.path.expandvars(root_value))
-    if not root.is_absolute():
-        root = (manifest_directory / root).resolve()
-    if not root.is_dir():
-        raise FileNotFoundError(f"Mounted WSI root does not exist: {root}")
-
-    extensions = {
-        extension.lower() if extension.startswith(".") else f".{extension.lower()}"
-        for extension in config.get("extensions", WSI_EXTENSIONS)
-    }
-    he_tokens = {
-        _normalized_token(_text(token)) for token in config.get("he_tokens", ["HE", "H01"])
-    }
-    if not he_tokens:
-        raise ValueError("wsi_discovery.he_tokens must contain at least one token")
-
-    hospital_subdirectories = config.get("hospital_subdirectories", {})
-    if not isinstance(hospital_subdirectories, dict):
-        raise ValueError("wsi_discovery.hospital_subdirectories must be an object")
-    recursive = bool(config.get("recursive", True))
-    default_block_id = _text(config.get("default_block_id")) or "UNSPECIFIED"
-    pattern_value = _text(config.get("block_pattern"))
-    block_pattern = re.compile(pattern_value) if pattern_value else None
-
-    for case in pending:
-        hospital_subdirectory = _text(hospital_subdirectories.get(case["hospital"]))
-        case_directory = _case_directory(case["case_id"], root, hospital_subdirectory)
-        if not case_directory.is_dir():
-            continue
-
-        paths = case_directory.rglob("*") if recursive else case_directory.glob("*")
-        for path in sorted(paths):
-            if not path.is_file() or path.suffix.lower() not in extensions:
-                continue
-            if not _is_he_path(path, case_directory, he_tokens):
-                continue
-            _add_wsi(
-                case,
-                path.stem,
-                "HE",
-                path.as_posix(),
-                _block_id_from_he_path(
-                    path,
-                    case_directory,
-                    case["case_id"],
-                    he_tokens,
-                    block_pattern,
-                    default_block_id,
-                ),
             )
 
 
@@ -518,18 +376,11 @@ def _finalize_cases(cases: dict[str, dict[str, Any]]) -> ParsedReportTables:
 
 
 def parse_report_tables(
-    tables: list[dict[str, Any]],
-    manifest_directory: str | Path,
-    wsi_discovery: dict[str, Any] | None = None,
+    tables: list[dict[str, Any]], manifest_directory: str | Path
 ) -> ParsedReportTables:
     cases: dict[str, dict[str, Any]] = {}
     seen_indexes: set[int] = set()
     base = Path(manifest_directory)
-    discovery = wsi_discovery or {}
-    discovery_mode = _text(discovery.get("mode")) or "legacy_tables"
-    if discovery_mode not in {"legacy_tables", "case_directory_he", "disabled"}:
-        raise ValueError(f"Unsupported wsi_discovery.mode: {discovery_mode!r}")
-    include_legacy_wsi = discovery_mode == "legacy_tables"
 
     for table in sorted(tables, key=lambda item: item["table_idx"]):
         table_idx = table["table_idx"]
@@ -547,18 +398,11 @@ def parse_report_tables(
             raise FileNotFoundError(f"Report table source does not exist: {source}")
 
         if source.is_dir() and table_type == "VGHTC2024":
-            _parse_vghtc_directory(
-                source, table_idx, cases, include_legacy_wsi=include_legacy_wsi
-            )
+            _parse_vghtc_directory(source, table_idx, cases)
         elif source.is_dir() and table_type == "CGMH2019":
-            _parse_cgmh_directory(
-                source, table_idx, cases, include_legacy_wsi=include_legacy_wsi
-            )
+            _parse_cgmh_directory(source, table_idx, cases)
         else:
             hospital = "VGHTC" if table_type == "VGHTC2024" else "CGMH"
             _parse_combined_table(source, table_idx, hospital, cases)
-
-    if discovery_mode == "case_directory_he":
-        _attach_case_directory_he_wsis(cases, discovery, base)
 
     return _finalize_cases(cases)

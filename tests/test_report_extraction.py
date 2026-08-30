@@ -12,7 +12,9 @@ from components.person_a.medgemma_extractor import _chunks, _json_object
 from components.person_a.medgemma_extractor import _canonical_key
 from components.person_a.report_extraction import (
     ReportExtractionEngine,
+    extract_cgmh_items,
     extract_labeled_items,
+    extract_vghtc_items,
 )
 from contracts.runtime import validate_artifact
 
@@ -47,6 +49,30 @@ Gross description: Histologic Type: this must not replace the diagnosis.
         self.assertEqual("Nottingham grade 2.", extracted["Histologic Grade"])
         self.assertEqual("95%.", extracted["ER status"])
         self.assertNotIn("Gross description", " ".join(extracted.values()))
+
+    def test_vghtc_extractor_preserves_original_vghtc_label_set(self) -> None:
+        report = "Tumor Size: 2 cm\nHistologic Type: Invasive carcinoma"
+        extracted = extract_vghtc_items(report)
+        self.assertNotIn("Tumor Size", extracted)
+        self.assertEqual("Invasive carcinoma", extracted["Histologic Type"])
+
+    def test_cgmh_extractor_preserves_aliases_and_grade_subitems(self) -> None:
+        report = (
+            "ER(6F11/Novacastra): Positive\n"
+            "PR(1A6/Novacastra): Negative\n"
+            "HER-2-neu(polyclone/DAKO): 2+\n"
+            "Tubular Differentiation: 2 Nuclear Pleomorphism: 3 "
+            "Mitotic Rate: 1 ER status: Positive"
+        )
+        extracted = extract_cgmh_items(report)
+        self.assertEqual("Positive", extracted["ER status"])
+        self.assertEqual("Negative", extracted["PR status"])
+        self.assertEqual("2+", extracted["Her-2/neu status"])
+        self.assertEqual(
+            "Tubular Differentiation: 2. Nuclear Pleomorphism: 3. "
+            "Mitotic Rate: 1.",
+            extracted["Histologic Grade"],
+        )
 
     def test_engine_resolves_query_design_names_to_catalog_names(self) -> None:
         histologic = "Invasive carcinoma of no special type (ductal)."

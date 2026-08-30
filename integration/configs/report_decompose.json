@@ -1,21 +1,4 @@
 {
-  "component_version": "person-a/report-decompose:0.4.0",
-  "dx_candidates_path": "/references/DxStructuredCandidates_integrated.json",
-  "wsi_discovery": {
-    "mode": "case_directory_he",
-    "root": "/data/wsi",
-    "recursive": true,
-    "extensions": [".mrxs", ".ndpi", ".svs", ".tif", ".tiff"],
-    "he_tokens": ["HE", "H01"],
-    "hospital_subdirectories": {},
-    "default_block_id": "UNSPECIFIED"
-  },
-  "report_extraction": {
-    "enabled": true,
-    "backend": "hospital_routed",
-    "only_when_missing": true,
-    "strict_result_classes": false,
-    "item_name_map": {},
-    "result_class_map": {}
-  }
+  "component_version": "person-a/report-decompose:0.3.0",
+  "dx_candidates_path": "/home/yasaisen/Desktop/27_research/research_main_v3/lab_19/DxStructuredCandidates_integrated.json"
 }

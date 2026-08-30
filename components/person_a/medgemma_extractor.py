@@ -66,6 +66,7 @@ class MedGemmaExtractor:
     def __init__(self, config: dict[str, Any] | None = None):
         self.config = config or {}
         self.model_id = self.config.get("model_id", "google/medgemma-1.5-4b-it")
+        self.model_revision = self.config.get("model_revision")
         self.token_env = self.config.get("token_env", "HF_TOKEN")
         self.chunk_chars = int(self.config.get("chunk_chars", 6500))
         self.overlap = int(self.config.get("overlap", 700))
@@ -138,7 +139,8 @@ class MedGemmaExtractor:
         if self.require_cuda and not torch.cuda.is_available():
             raise RuntimeError(
                 "MedGemma backend requires CUDA, but PyTorch cannot see a GPU. "
-                "Run it with the MedGemma Compose GPU override."
+                "Run the Person A container with GPU access (for example, "
+                "docker run --gpus all)."
             )
 
         token = os.environ.get(self.token_env, "").strip()
@@ -187,10 +189,13 @@ class MedGemmaExtractor:
                 "text_gpu_vision_cpu"
             )
 
-        self.processor = AutoProcessor.from_pretrained(self.model_id, token=token)
+        self.processor = AutoProcessor.from_pretrained(
+            self.model_id, revision=self.model_revision, token=token
+        )
         self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token
         self.model = AutoModelForImageTextToText.from_pretrained(
             self.model_id,
+            revision=self.model_revision,
             token=token,
             quantization_config=quantization,
             device_map=device_map,

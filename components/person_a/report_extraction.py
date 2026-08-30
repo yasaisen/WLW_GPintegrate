@@ -13,11 +13,40 @@ import re
 from typing import Any
 
 
-# Aliases consolidated from Query_Design/De中榮.py and De長庚.py.  The keys are
-# human-readable names; ``ReportExtractionEngine`` resolves them to the actual
-# keys in DxStructuredCandidates_integrated.json (spaces/underscores and case
-# differences are ignored).
-ITEM_ALIASES: dict[str, list[str]] = {
+# Keep the two Query_Design regex implementations separate. Their aliases and
+# stop conditions are hospital-specific and must not be silently unified.
+VGHTC_ITEM_ALIASES: dict[str, list[str]] = {
+    "Histologic Type": ["Histologic Type"],
+    "Histologic Grade": ["Histologic Grade"],
+    "size of invasive carcinoma": [
+        "size of invasive carcinoma",
+        "The largest size of invasive carcinoma",
+    ],
+    "Angiolymphatic permeation": ["Angiolymphatic permeation"],
+    "Perineural invasion": ["Perineural invasion"],
+    "Tumor focality": ["Tumor focality"],
+    "Margins": ["Margins"],
+    "Microcalcification": ["Microcalcification", "Microcalcifications"],
+    "Lymph node status": ["Lymph node status"],
+    "Extranodal involvement": ["Extranodal involvement"],
+    "Architectural pattern of DCIS": ["Architectural pattern of DCIS"],
+    "Nuclear grade of DCIS": ["Nuclear grade of DCIS"],
+    "Necrosis of DCIS": ["Necrosis of DCIS"],
+    "Extensive intraductal component": ["Extensive intraductal component"],
+    "ER status": ["ER status", "Estrogen receptor"],
+    "PR status": ["PR status", "Progesterone receptor"],
+    "Her-2/neu status": ["Her-2/neu status"],
+    "Ki-67 labeling index": ["Ki-67 labeling index"],
+    "Treatment Effect": ["Treatment Effect"],
+    "pT Category": ["pT Category"],
+    "pN Category": ["pN Category"],
+    "pM Category": ["pM Category"],
+    "Pathological TNM stage": ["Pathological TNM stage"],
+    "TNM descriptors": ["TNM descriptors"],
+}
+
+
+CGMH_ITEM_ALIASES: dict[str, list[str]] = {
     "Histologic Type": [
         "Histologic Type",
         "The invasive carcinoma is",
@@ -44,7 +73,7 @@ ITEM_ALIASES: dict[str, list[str]] = {
     "Perineural invasion": ["Perineural invasion"],
     "Tumor focality": ["Tumor focality"],
     "Tumor infiltrating lymphocytes (TILs)": [
-        "Tumor infiltrating lymphocytes (TILs)",
+        r"Tumor infiltrating lymphocytes \(TILs\)",
         "Tumor infiltrating lymphocytes",
         "TILs",
         "TIL",
@@ -65,21 +94,32 @@ ITEM_ALIASES: dict[str, list[str]] = {
     "Nuclear grade of DCIS": ["Nuclear grade of DCIS", "Nuclear Grade"],
     "Necrosis of DCIS": ["Necrosis of DCIS", "Necrosis", "Comedo necrosis"],
     "Extensive intraductal component": ["Extensive intraductal component"],
-    "ER status": ["ER status", "Estrogen receptor", "ER(6F11)"],
-    "PR status": ["PR status", "Progesterone receptor", "PR(1A6)"],
+    "ER status": [
+        "ER status",
+        "Estrogen receptor",
+        r"ER\(6F11\)",
+        r"ER\(6F11/Novacastra\)",
+    ],
+    "PR status": [
+        "PR status",
+        "Progesterone receptor",
+        r"PR\(1A6\)",
+        r"PR\(1A6/Novacastra\)",
+    ],
     "Her-2/neu status": [
         "Her-2/neu status",
-        "HER-2-neu(polyclone)",
+        r"HER-2-neu\(polyclone\)",
         "HER2",
+        r"HER-2-neu\(polyclone/DAKO\)",
         "Her-2/neu",
     ],
     "Ki-67 labeling index": [
         "Ki-67 labeling index",
-        "Ki-67(MIB-1)",
+        r"Ki-67\(MIB-1\)",
         "Ki-67",
         "KI067",
-        "The ki-67(MIB-1) index is",
-        "Ki-67(MIB-1) labeling index",
+        r"The ki-67\(MIB-1\) index is",
+        r"Ki-67\(MIB-1\) labeling index",
     ],
     "Treatment Effect": ["Treatment Effect"],
     "pT Category": ["pT Category"],
@@ -91,7 +131,49 @@ ITEM_ALIASES: dict[str, list[str]] = {
 
 
 GROSS_STOP_RE = re.compile(r"\bGross\s*description\s*[:：]", re.IGNORECASE)
-NUMBERED_ITEM_RE = re.compile(r"(?m)^\s*\d+\.\s+(?=[A-Za-z])")
+CGMH_GRADE_SUB_ITEMS = [
+    "Tubular Differentiation",
+    "Ductal formation",
+    "Nuclear Pleomorphism",
+    "Mitotic Rate",
+    "Mitotic count",
+    "Overall Score",
+    "Overall Grade",
+    "Overall Tentative Grade",
+    "Tentative Overall Grade",
+]
+CGMH_EXTRA_STOP_LABELS = [
+    "CK14",
+    "P63",
+    "p63/CK14",
+    "CK14 and P63",
+    "E-cadherin",
+    "p120",
+    "CK5/6",
+    "Synaptophysin",
+    "Chromogranin",
+    "GATA3",
+    "Calponin",
+    "SMA",
+    "CD31",
+    "D2-40",
+    "Ductal Carcinoma In Situ (DCIS)",
+]
+CGMH_DOT_SPACE_DASH_STOP = r"\.\s+-\s+"
+_cgmh_stop_labels = [
+    alias.replace("\\", "")
+    for aliases in CGMH_ITEM_ALIASES.values()
+    for alias in aliases
+]
+_cgmh_stop_labels.extend(CGMH_GRADE_SUB_ITEMS)
+_cgmh_stop_labels.extend(CGMH_EXTRA_STOP_LABELS)
+_cgmh_stop_labels.extend(
+    ["DX", "GROSS D", "MICRO D", "ADDENDUM", "Description", "Disclaimer", "Note", "SNOMED"]
+)
+CGMH_STOP_PATTERN = "|".join(
+    re.escape(label)
+    for label in sorted(set(_cgmh_stop_labels), key=len, reverse=True)
+)
 
 
 def _key(value: str) -> str:
@@ -116,7 +198,7 @@ def _clean_value(value: str) -> str:
     return compact
 
 
-def _alias_expression(alias: str) -> str:
+def _vghtc_alias_expression(alias: str) -> str:
     escaped = re.escape(alias)
     escaped = escaped.replace(r"\ ", r"\s*")
     escaped = escaped.replace(r"\-", r"\s*[-\s]*\s*")
@@ -124,44 +206,82 @@ def _alias_expression(alias: str) -> str:
     return escaped
 
 
-def extract_labeled_items(report_text: str) -> dict[str, str]:
-    """Extract Query_Design diagnostic labels from one pathology report.
-
-    Values stop at the next known label, the next numbered top-level item, or
-    ``Gross description``.  This avoids the old scripts' workbook/global state
-    while preserving their hospital-report regex behavior.
-    """
-
+def extract_vghtc_items(report_text: str) -> dict[str, str]:
+    """Run the regex generation and Gross-description stop from De中榮.py."""
     if not report_text:
         return {}
     gross = GROSS_STOP_RE.search(report_text)
     text = report_text[: gross.start()] if gross else report_text
 
-    matches: list[tuple[int, int, str]] = []
-    for item_name, aliases in ITEM_ALIASES.items():
-        expressions = "|".join(_alias_expression(alias) for alias in aliases)
-        pattern = re.compile(
-            rf"(?<![A-Za-z0-9])(?:\d+\.\s*)?(?:{expressions})"
-            rf"(?:\s*\([^)]*\))?\s*[:：]\s*",
-            re.IGNORECASE | re.DOTALL,
-        )
+    extracted: dict[str, str] = {}
+    for item_name, aliases in VGHTC_ITEM_ALIASES.items():
+        patterns = [
+            rf"(?:\d+\.\s*)?{_vghtc_alias_expression(alias)}"
+            rf"(?:\s*\(.*?\))?\s*[:：]\s*(.*?)(?=\n\d+\.|\Z)"
+            for alias in aliases
+        ]
+        pattern = re.compile("|".join(patterns), re.IGNORECASE | re.DOTALL)
         match = pattern.search(text)
         if match:
-            matches.append((match.start(), match.end(), item_name))
-
-    matches.sort(key=lambda item: item[0])
-    extracted: dict[str, str] = {}
-    for index, (_, value_start, item_name) in enumerate(matches):
-        boundaries = [len(text)]
-        if index + 1 < len(matches):
-            boundaries.append(matches[index + 1][0])
-        numbered = NUMBERED_ITEM_RE.search(text, value_start)
-        if numbered:
-            boundaries.append(numbered.start())
-        value = _clean_value(text[value_start : min(boundaries)])
-        if value:
-            extracted[item_name] = value
+            raw_value = next(
+                (group for group in match.groups() if group is not None), ""
+            ).strip()
+            value = re.sub(r"\s+", " ", raw_value).strip()
+            if value and value.casefold() != "not found":
+                extracted[item_name] = value
     return extracted
+
+
+def _cgmh_post_clean(value: str) -> str:
+    if not value:
+        return value
+    cleaned = re.sub(r"\s+", " ", value).strip()
+    cleaned = re.split(CGMH_DOT_SPACE_DASH_STOP, cleaned, maxsplit=1)[0].strip()
+    return re.sub(r"[\s\.\:\：\-]+$", "", cleaned).strip()
+
+
+def extract_cgmh_items(report_text: str) -> dict[str, str]:
+    """Run the stop-label and grade-subitem regex flow from De長庚.py."""
+    if not report_text:
+        return {}
+
+    extracted: dict[str, str] = {}
+    for item_name, aliases in CGMH_ITEM_ALIASES.items():
+        if item_name == "Histologic Grade":
+            continue
+        for alias in aliases:
+            pattern = (
+                rf"{alias}\s*[:：]\s*(.*?)"
+                rf"(?=\s*[\.\u2026;；,，]*\s*(?:{CGMH_STOP_PATTERN})\s*[:：]"
+                rf"|\.\s+[A-Z]|{CGMH_DOT_SPACE_DASH_STOP}|\n\d+\.|\Z)"
+            )
+            match = re.search(pattern, report_text, re.IGNORECASE | re.DOTALL)
+            if match:
+                value = _cgmh_post_clean(match.group(1))
+                if value and value.casefold() != "not found":
+                    extracted[item_name] = value
+                    break
+
+    grade_parts = []
+    for sub_item in CGMH_GRADE_SUB_ITEMS:
+        pattern = (
+            rf"{re.escape(sub_item)}\s*[:：]\s*(.*?)"
+            rf"(?=\s+(?:{CGMH_STOP_PATTERN})\s*[:：]"
+            rf"|{CGMH_DOT_SPACE_DASH_STOP}|\n\d+\.|\Z)"
+        )
+        match = re.search(pattern, report_text, re.IGNORECASE | re.DOTALL)
+        if match:
+            value = _cgmh_post_clean(match.group(1))
+            if value:
+                grade_parts.append(f"{sub_item}: {value}")
+    if grade_parts:
+        extracted["Histologic Grade"] = ". ".join(grade_parts) + "."
+    return extracted
+
+
+def extract_labeled_items(report_text: str) -> dict[str, str]:
+    """Backward-compatible name for the original VGHTC regex extractor."""
+    return extract_vghtc_items(report_text)
 
 
 class ReportExtractionEngine:
@@ -181,7 +301,7 @@ class ReportExtractionEngine:
             raise ValueError(f"Unsupported report extraction backend: {self.backend!r}")
         self.only_when_missing = bool(self.config.get("only_when_missing", True))
         self.strict_result_classes = bool(
-            self.config.get("strict_result_classes", False)
+            self.config.get("strict_result_classes", True)
         )
         self._catalog_by_key = {_key(name): name for name in catalog}
         self._medgemma: Any | None = None
@@ -232,7 +352,7 @@ class ReportExtractionEngine:
           regex Histologic Type while every other regex value is preserved.
         """
 
-        regex_items = extract_labeled_items(report_text)
+        regex_items = extract_cgmh_items(report_text)
         if not regex_items:
             return self._medgemma_extract(report_text)
 
@@ -256,12 +376,12 @@ class ReportExtractionEngine:
         if self.backend == "hospital_routed":
             if hospital == "VGHTC":
                 # VGHTC is deliberately regex-only.  Never load MedGemma here.
-                return extract_labeled_items(report_text)
+                return extract_vghtc_items(report_text)
             if hospital == "CGMH":
                 return self._extract_cgmh_report(report_text)
             raise ValueError(f"Unsupported hospital for report extraction: {hospital!r}")
 
-        regex_items = extract_labeled_items(report_text) if self.backend != "medgemma" else {}
+        regex_items = extract_vghtc_items(report_text) if self.backend != "medgemma" else {}
         if self.backend == "regex":
             return regex_items
         if self.backend == "medgemma":
@@ -298,7 +418,7 @@ class ReportExtractionEngine:
             raise ValueError(
                 f"Extracted {item_name} result {raw_value!r} is not one of the "
                 "DxStructuredCandidates_integrated.json classes; add a "
-                "report_extraction.result_class_map entry or disable strict mode"
+                "report_extraction.result_class_map entry"
             )
         return result_class
 

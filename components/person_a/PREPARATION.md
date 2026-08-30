@@ -18,8 +18,6 @@ F v2.0 能產生 G v2.0。integration layer 不應 import 你的內部 class。
 | 要準備的項目 | 放置位置 | 說明 |
 |---|---|---|
 | Report Decompose 實作 | `components/person_a/report_decompose.py` | 保留 `--input/--output/--config` CLI；一次處理多 table/case |
-| Report extraction | `components/person_a/report_extraction.py` | Query_Design regex 的逐報告函式；不直接讀 Excel、不自行寫最終 JSON |
-| Optional MedGemma | `components/person_a/medgemma_extractor.py` | 只在 config 選用時載入模型；同一程序內快取模型 |
 | Hospital table parsers | `components/person_a/table_parsers.py` | 依 `table_type` 解析 VGHTC/CGMH，統一為 reports + WSIs |
 | XLSX reader | `components/person_a/xlsx_reader.py` | 只讀取工作表欄位/值，不複製原始 Excel |
 | Query Generation 實作 | `components/person_a/query_generation.py` | 讀 D/F、寫 G，不直接讀乙的程式或資料庫內部物件 |
@@ -39,32 +37,21 @@ F v2.0 能產生 G v2.0。integration layer 不應 import 你的內部 class。
 B 是 run-level 來源 manifest，payload 的 `tables[]` 只放 `table_idx/table_type/table_path`；
 它不屬於單一 case，所以 envelope 不放 `case_id`。
 
-新預設 `wsi_discovery.mode=case_directory_he`：`table_path` 只負責指出掛載後的院別報告目錄，
-VGHTC/CGMH parser 從其中的 Excel 讀取報告與 `case_id`；WSI 則另外從掛載後的
-`/data/wsi/<case_id>/` 遞迴尋找檔名或子目錄含 `HE`/`H01` 的檔案。也就是以中榮的`病理序號`
-或長庚的 `Path_ID` 作為 `case_id`（對話中統稱 `record_id`），再拿同一個 ID 找 WSI 資料夾。
-若 WSI 根目錄先分院別，可透過
-`hospital_subdirectories` 設定。
-
-block 會優先由資料夾或檔名中 case ID 後的片段判斷；判斷不到時明確寫成 `UNSPECIFIED`。
-等院方提供正式檔名規則後，可用 `block_pattern` 指定正規表示式。舊 WSI 清單表的 join 邏輯仍保留
-在 `legacy_tables` 模式，但不是新預設。Windows-style source paths 也必須先正規化成 container
-可用的 separator。
+`table_path` 指向 raw-data directory 時，VGHTC parser 會 join 病理報告 Excel、WSI 總表與
+`data_path`；CGMH parser 會 join 病理報告 Excel、影像路徑 CSV、染色總表與 `data_path`。
+WSI filename 可能含 `15.33.07` 這類掃描時間，實作只能移除已知 WSI 副檔名，不可直接用一般
+suffix 規則誤刪時間尾段。Windows-style source paths 也必須先正規化成 container 可用的 separator。
 
 ### D.DxPairs
 
 每個 per-case D 使用 `payload.case_list[0]`。報告原文在 `report_raw_content`，DxPair 在
-`structured_report.DxItems`，掃描找到的 WSI 在 `tissue_blocks[].stains[]`，其中 `filepath` 是
-容器內可讀的 `/data/wsi/...` 路徑。合法 DxItem 及其預設欄位每次執行都由
+`structured_report.DxItems`，WSI 在 `tissue_blocks[].stains[]`，其中 `filepath` 就是 report table
+帶入的 `wsi_path`。合法 DxItem 及其預設欄位每次執行都由
 `DxStructuredCandidates_integrated.json` 載入。
 
 DxItem 的 `referenceWSI[]` 指定對應 WSI；來源有明示 ID 時以明示內容為準，否則依 catalog 的
 `referenceType` 選染色（例如 HE），連 `referenceType` 都沒有時才預設全部 WSI。raw hospital
-report 沒有預先填入結果時，`report_extraction.py` 會在 extraction boundary 逐份報告抽取；完全
-沒有命中時仍可合法輸出空 `DxItems`，讓 run manifest 與人工稽核能看見該 case。
-
-Report Decompose 的資料流、設定與切換 MedGemma 方法見
-[`REPORT_DECOMPOSE_GUIDE.md`](REPORT_DECOMPOSE_GUIDE.md)。
+report 沒有結構化結果時可合法輸出空 `DxItems`，正式報告分解/NLP 接在甲的 extraction boundary。
 
 每個 pair 必須有穩定 ID，不可只靠 list index：
 

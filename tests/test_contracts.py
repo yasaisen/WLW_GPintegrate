@@ -14,11 +14,7 @@ INPUTS = ROOT / "integration" / "fixtures" / "input"
 
 class ContractTests(unittest.TestCase):
     def test_canonical_inputs_validate(self) -> None:
-        for filename in [
-            "A_literature.json",
-            "B_report_tables.json",
-            "B_report_tables.mounted.example.json",
-        ]:
+        for filename in ["A_literature.json", "B_report_tables.json"]:
             artifact = json.loads((INPUTS / filename).read_text(encoding="utf-8"))
             validate_artifact(artifact)
 

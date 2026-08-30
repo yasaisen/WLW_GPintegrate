@@ -148,36 +148,18 @@ B 是整批執行的來源 manifest，結構如下；`table_path` 可指向單�
   "artifact_id": "report-tables-run-001",
   "payload": {
     "tables": [
-      {"table_idx": 0, "table_type": "VGHTC2024", "table_path": "/data/reports/VGHTC"},
-      {"table_idx": 1, "table_type": "CGMH2019", "table_path": "/data/reports/CGMH"}
+      {"table_idx": 0, "table_type": "VGHTC2024", "table_path": "/data/raw/VGHTC"},
+      {"table_idx": 1, "table_type": "CGMH2019", "table_path": "/data/raw/CGMH"}
     ]
   }
 }
 ```
 
-正式資料不放進 Git。Compose 會把 host 的報告目錄唯讀掛成 `/data/reports`，把 WSI 目錄唯讀掛成
-`/data/wsi`。預設的 `case_directory_he` 模式會先從中榮／長庚 Excel 讀出報告與 `case_id`，再到
-`/data/wsi/<case_id>/` 下面遞迴尋找檔名或子目錄含 `HE`/`H01` 的切片。找到的 HE 檔案依資料夾或
-檔名後綴分到 block；無法判斷 block 時使用 `UNSPECIFIED`，不會假造 block。若 WSI 根目錄還分成
-院別，可在 `wsi_discovery.hospital_subdirectories` 設定院別子目錄。
-
-舊的 WSI 清單表接法仍可把 `wsi_discovery.mode` 改成 `legacy_tables` 使用；新預設不再要求報告 Excel
-內含 WSI 路徑，也不要求把 Excel 或 WSI 複製進 repository。`integration/fixtures/input/` 只保留可公開
-的假資料，供測試 clone 是否能執行。標準化 CSV/XLSX 仍可提供 `dx_item`、`dx_result` 與
-`reference_wsi_ids`；實際 structured-report 抽取會在甲的 extraction boundary 逐 case 執行。
-
-預設 `hospital_routed` extraction 依醫院分流：中榮（VGHTC）完整使用 Query_Design regex，絕不
-呼叫 MedGemma；長庚（CGMH）先跑長庚 regex，完全沒有命中時才由 MedGemma 抽取全部項目，
-有任何 regex 命中時則保留 regex 結果，只請 MedGemma 抽取 Histologic Type 後合併。表格本身
-已有 `dx_item/dx_result` 時不重跑抽取。長庚 raw report 模式需要 server environment 另外準備
-PyTorch、Transformers、GPU 與 `HF_TOKEN`。正式 GPU image、Compose override 與環境／模型 smoke
-test 已放在 `components/person_a/Dockerfile.medgemma`、`integration/compose.medgemma.yaml` 與
-`components/person_a/medgemma_smoke.py`；執行方式見 Report Decompose 整合說明。
-
-抽取文字與 `DxResultCls` 的正式類別不同時，可在 `report_extraction.result_class_map` 明確映射；
-整合階段預設 `strict_result_classes: false`，會保留原始抽取文字，不會因尚未分類而中斷整批。
-部署前若要強制所有結果屬於候選類別，將它改成 `true`。完整接線說明見
-[`components/person_a/REPORT_DECOMPOSE_GUIDE.md`](components/person_a/REPORT_DECOMPOSE_GUIDE.md)。
+目前 VGHTC adapter 會合併兩份病理報告 Excel、`VGHTC_list_total_2.xlsx` 與 `data_path`；
+CGMH adapter 會合併 `Pathology_Report_v1.xlsx`、`Pathology_image_path_v1.csv`、
+`CGMH_list_total.xlsx` 與 `data_path`。標準化 CSV/XLSX 可提供 `dx_item`、`dx_result` 與
+`reference_wsi_ids`；原始院端表則先正規化 report、case、block、stain 與 WSI 路徑，實際
+structured-report 模型可在甲的 extraction boundary 接入。
 
 DxItem 合法值與欄位預設值在執行時讀取 lab_19 的
 `DxStructuredCandidates_integrated.json`。若來源沒有明示 WSI：`referenceType` 有指定時選該染色
@@ -239,20 +221,6 @@ cd integration
 LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) \
   docker compose up --build --abort-on-container-failure
 ```
-
-正式執行前，將 `integration/.env.example` 複製成不會被 Git 追蹤的 `integration/.env`，填入這台
-電腦實際的資料位置。例如 Windows Docker Desktop：
-
-```dotenv
-REPORT_ROOT=D:/WLW_data/reports
-WSI_ROOT=D:/WLW_data/wsi
-REPORT_TABLES_INPUT=/data/reports/B_report_tables.json
-```
-
-這表示 Docker 外面的 `D:/WLW_data/reports` 在容器裡看成 `/data/reports`，外面的
-`D:/WLW_data/wsi` 看成 `/data/wsi`。`B_report_tables.json` 也屬於真實資料設定，放在
-`REPORT_ROOT` 外部資料目錄，不推到 GitHub。範例目錄與配對規則見
-[`components/person_a/REPORT_DECOMPOSE_GUIDE.md`](components/person_a/REPORT_DECOMPOSE_GUIDE.md)。
 
 Compose 用 `service_completed_successfully` 表達 DAG 依賴，產物會留在
 `integration/artifacts/`。傳入 host UID/GID 是為了避免 bind mount 的產物變成 root-owned。

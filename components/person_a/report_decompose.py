@@ -134,9 +134,7 @@ def main() -> None:
     output_index = Path(args.output).resolve()
 
     parsed = parse_report_tables(
-        report_tables["payload"]["tables"],
-        input_manifest.parent,
-        config.get("wsi_discovery"),
+        report_tables["payload"]["tables"], input_manifest.parent
     )
     if not parsed.cases:
         raise ValueError("Report Decompose produced no cases containing both report and WSI data")
