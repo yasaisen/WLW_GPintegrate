@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 
 from components.person_a.table_parsers import (
+    CGMH_REPORT_TEXT_FIELDS,
+    _first,
     _filename_with_extension,
     _portable_path,
     _without_wsi_extension,
@@ -10,6 +12,12 @@ from components.person_a.table_parsers import (
 
 
 class ReportTableParserTests(unittest.TestCase):
+    def test_cgmh_accepts_the_real_chinese_report_header(self) -> None:
+        self.assertEqual(
+            "real report text",
+            _first({"病理報告": "real report text"}, CGMH_REPORT_TEXT_FIELDS),
+        )
+
     def test_known_wsi_extension_does_not_consume_scan_timestamp(self) -> None:
         filename = "slide-name_15.33.07.ndpi"
         self.assertEqual("slide-name_15.33.07", _without_wsi_extension(filename))

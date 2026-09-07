@@ -1,6 +1,6 @@
 {
-  "component_version": "person-a/report-decompose:0.5.0",
-  "dx_candidates_path": "/references/DxStructuredCandidates_integrated.json",
+  "component_version": "person-a/report-decompose:0.6.0",
+  "dx_candidates_path": "components/person_a/references/DxStructuredCandidates_integrated.json",
   "report_extraction": {
     "enabled": true,
     "backend": "hospital_routed",

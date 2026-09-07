@@ -52,8 +52,8 @@ def _metadata_case(
             )
         definition = catalog[item_name]
         result = pair["dx_result"]
-        allowed_results = definition["DxResultCls"]
-        if strict_result_classes and result not in allowed_results:
+        allowed_results = definition.get("DxResultCls", [])
+        if strict_result_classes and allowed_results and result not in allowed_results:
             raise ValueError(
                 f"Case {case['case_id']!r} {item_name} result {result!r} is not in "
                 "DxStructuredCandidates_integrated.json"

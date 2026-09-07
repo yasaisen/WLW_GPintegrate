@@ -40,9 +40,10 @@ B 的 `payload.tables[]` 仍只包含：
 - 標準化表格：直接讀 `report_text`、`wsi_path`、`stain_type`、`block_id`、`dx_item` 與
   `dx_result` 等欄位。
 
-報告、WSI、candidate JSON 與模型權重都留在 Git repository 外；Docker 執行時由使用者或整合
-負責人以唯讀 mount 提供。B 內的路徑必須是容器看得到的路徑，不是某位成員的 Windows home
-directory。
+報告、WSI 與模型權重都留在 Git repository 外；Docker 執行時由使用者或整合負責人以唯讀
+mount 提供。B 內的路徑必須是容器看得到的路徑，不是某位成員的 Windows home directory。
+目前約定的小型 candidate 定義沒有病人資料，隨 Person A 程式放在
+`references/DxStructuredCandidates_integrated.json`。
 
 ## 報告抽取規則
 
@@ -60,9 +61,11 @@ CGMH
 
 表格已提供 `dx_item/dx_result` 時，`only_when_missing: true` 會保留既有結果，不重新抽取。
 
-`strict_result_classes: true` 會要求 `DxResultCls` 存在於
-`DxStructuredCandidates_integrated.json`。模型或 Regex 的原始文字保留在 `DxResultRawTxt` 與
-`DxResultTxt`；若原始文字不是候選類別，必須在 `result_class_map` 明確映射，不能自行放寬 contract。
+`Histologic_Type` 的 `DxResultCls` 固定為
+`UDH / FEA / ADH / DCIS / IC / OTHER / AMBIGUOUS`，分類規則沿用 Query_Design 的
+`classify_histologic_type.py`。模型或 Regex 的原始文字保留在 `DxResultRawTxt` 與 `DxResultTxt`。
+其他 DxItem 的 candidate list 為空，代表目前 `DxResultCls` 直接保留 free text；strict mode 只限制
+有明列 candidate classes 的項目。
 
 ## 標準 Person A 檔案
 
@@ -72,6 +75,8 @@ CGMH
 - `component.yaml`：記錄 Python、CUDA、GPU/VRAM、模型 revision 與 entrypoints。
 - `configs/report_decompose.default.json`：B -> D 正式預設設定。
 - `configs/query_generation.default.json`：D + F -> G 正式預設設定。
+- `references/DxStructuredCandidates_integrated.json`：Histologic Type 七類與其他項目的 free-text 定義。
+- `histologic_type_classifier.py`：將 Histologic Type 原始文字歸入約定七類。
 - `report_extraction.py`：Regex、醫院分流與結果類別映射。
 - `medgemma_extractor.py`：MedGemma adapter；同一程序只載入一次模型。
 - `medgemma_smoke.py`：GPU、4-bit 與真模型短生成檢查。
@@ -94,7 +99,7 @@ fixture 已有結構化結果，因此不需要載入 MedGemma。正式 raw CGMH
 在 repository 根目錄建立 GitHub 規定的 Person A Dockerfile：
 
 ```powershell
-docker build -f components/person_a/Dockerfile -t wlw/person-a:0.5.0 .
+docker build -f components/person_a/Dockerfile -t wlw/person-a:0.6.0 .
 ```
 
 以下是單獨執行 B -> D 的示意；實際 host 路徑由執行機器決定：
@@ -105,10 +110,9 @@ docker run --rm --gpus all `
   -e HF_HOME=/models/huggingface `
   -v "D:/WLW_data/raw:/data/raw:ro" `
   -v "D:/WLW_data/wsi:/data/wsi:ro" `
-  -v "D:/WLW_reference/DxStructuredCandidates_integrated.json:/references/DxStructuredCandidates_integrated.json:ro" `
   -v "D:/WLW_models/huggingface:/models/huggingface" `
   -v "D:/WLW_output:/outputs" `
-  wlw/person-a:0.5.0 `
+  wlw/person-a:0.6.0 `
   --input /data/raw/B_report_tables.json `
   --output /outputs/D_dx_pairs_index.json `
   --config /app/components/person_a/configs/report_decompose.default.json
@@ -125,7 +129,7 @@ raw directory 內的 B 可將 `table_path` 寫成 `/data/raw/VGHTC` 與 `/data/r
 ```powershell
 docker run --rm --gpus all `
   --entrypoint python `
-  wlw/person-a:0.5.0 `
+  wlw/person-a:0.6.0 `
   -m components.person_a.medgemma_smoke
 ```
 
@@ -136,7 +140,7 @@ docker run --rm --gpus all `
   -e HF_TOKEN `
   -v "D:/WLW_models/huggingface:/models/huggingface" `
   --entrypoint python `
-  wlw/person-a:0.5.0 `
+  wlw/person-a:0.6.0 `
   -m components.person_a.medgemma_smoke --load-model
 ```
 
@@ -159,4 +163,4 @@ python -m unittest discover -s tests -v
 - VGHTC 絕不呼叫 MedGemma。
 - CGMH 依 Regex 命中情況呼叫 MedGemma。
 - 缺 input、candidate、模型權限或 GPU 時以 non-zero exit code 失敗。
-- Git 變更不包含 `.env`、token、報告、WSI、candidate 真實檔案或模型權重。
+- Git 變更不包含 `.env`、token、報告、WSI 或模型權重。

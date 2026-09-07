@@ -13,6 +13,7 @@ from components.person_a.xlsx_reader import iter_xlsx_records
 
 
 SUPPORTED_TABLE_TYPES = {"VGHTC2024", "CGMH2019"}
+CGMH_REPORT_TEXT_FIELDS = ("pathology_report", "病理報告")
 WSI_EXTENSIONS = (".ndpi", ".mrxs", ".svs", ".tif", ".tiff")
 
 
@@ -279,7 +280,10 @@ def _parse_cgmh_directory(
     report_path = source_dir / "Pathology_Report_v1.xlsx"
     for sheet_name, row_number, record in iter_xlsx_records(report_path):
         case_id = _first(record, ["Path_ID"])
-        report_text = _first(record, ["pathology_report"])
+        # The real CGMH workbook uses the Chinese header.  Keep the English
+        # alias for normalized/future exports while accepting the hospital file
+        # without asking anyone to rename its columns.
+        report_text = _first(record, CGMH_REPORT_TEXT_FIELDS)
         if case_id and report_text:
             source_case_ids.add(case_id)
             case = _case(cases, case_id, "CGMH")

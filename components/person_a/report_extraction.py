@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from components.person_a.histologic_type_classifier import classify_histologic_type
+
 
 # Keep the two Query_Design regex implementations separate. Their aliases and
 # stop conditions are hospital-specific and must not be silently unified.
@@ -413,8 +415,19 @@ class ReportExtractionEngine:
         allowed_by_key = {
             _key(value): value for value in allowed if isinstance(value, str)
         }
-        result_class = allowed_by_key.get(_key(result_class), result_class)
-        if self.strict_result_classes and result_class not in allowed:
+        canonical = allowed_by_key.get(_key(result_class))
+        if canonical is not None:
+            return canonical
+
+        if _key(item_name) == _key("Histologic_Type"):
+            classified = classify_histologic_type(raw_value)
+            canonical = allowed_by_key.get(_key(classified))
+            if canonical is not None:
+                return canonical
+
+        # An empty candidate list means this DxItem is intentionally free text.
+        # Only items with declared classes are restricted by strict mode.
+        if self.strict_result_classes and allowed:
             raise ValueError(
                 f"Extracted {item_name} result {raw_value!r} is not one of the "
                 "DxStructuredCandidates_integrated.json classes; add a "
@@ -428,6 +441,19 @@ class ReportExtractionEngine:
         if not self.enabled:
             return case
         if case["dx_pairs"] and self.only_when_missing:
+            # Pre-structured fixtures/tables may carry raw Histologic Type text.
+            # Normalize that one classified item while leaving already-valid
+            # classes and all free-text items untouched.
+            for pair in case["dx_pairs"]:
+                item_name = pair["dx_item"]
+                if item_name not in self.catalog:
+                    continue
+                raw_value = pair["dx_result"]
+                result_class = self._mapped_result_class(item_name, raw_value)
+                if result_class != raw_value:
+                    pair["dx_result"] = result_class
+                    pair.setdefault("dx_result_text", raw_value)
+                    pair.setdefault("dx_result_raw_text", raw_value)
             return case
 
         extracted_by_item: dict[str, dict[str, str]] = {}

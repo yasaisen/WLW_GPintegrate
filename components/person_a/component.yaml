@@ -1,6 +1,6 @@
 name: person_a_report_and_query
 owner: person_A
-version: 0.5.0
+version: 0.6.0
 inputs: [B.ReportTables@1.0, D.DxPairs@2.0, F.Chunks@2.0]
 outputs: [D.DxPairsIndex@1.0, D.DxPairs@2.0, G.VisualAttributeQueries@2.0]
 runtime:

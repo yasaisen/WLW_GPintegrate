@@ -8,8 +8,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from components.person_a.histologic_type_classifier import (
+    HISTOLOGIC_TYPE_CLASSES,
+    classify_histologic_type,
+)
 from components.person_a.medgemma_extractor import _chunks, _json_object
 from components.person_a.medgemma_extractor import _canonical_key
+from components.person_a.reference_data import load_dx_candidates
 from components.person_a.report_extraction import (
     ReportExtractionEngine,
     extract_cgmh_items,
@@ -33,6 +38,83 @@ def _definition(result: str, reference_type: list[str]) -> dict[str, object]:
 
 
 class ReportExtractionTests(unittest.TestCase):
+    def test_histologic_type_uses_the_agreed_seven_classes(self) -> None:
+        examples = {
+            "usual ductal hyperplasia": "UDH",
+            "flat epithelial atypia": "FEA",
+            "atypical ductal hyperplasia": "ADH",
+            "ductal carcinoma in situ": "DCIS",
+            "invasive ductal carcinoma": "IC",
+            "fibroadenoma": "OTHER",
+            "carcinoma": "AMBIGUOUS",
+        }
+        self.assertEqual(
+            ("UDH", "FEA", "ADH", "DCIS", "IC", "OTHER", "AMBIGUOUS"),
+            HISTOLOGIC_TYPE_CLASSES,
+        )
+        for raw_text, expected in examples.items():
+            with self.subTest(raw_text=raw_text):
+                self.assertEqual(expected, classify_histologic_type(raw_text))
+
+    def test_packaged_candidates_restrict_only_histologic_type(self) -> None:
+        candidate_path = (
+            ROOT
+            / "components"
+            / "person_a"
+            / "references"
+            / "DxStructuredCandidates_integrated.json"
+        )
+        structured_report, _ = load_dx_candidates(candidate_path)
+        catalog = structured_report["DxItems"]
+        self.assertEqual(
+            list(HISTOLOGIC_TYPE_CLASSES),
+            catalog["Histologic_Type"]["DxResultCls"],
+        )
+        self.assertEqual(25, len(catalog))
+        for name, definition in catalog.items():
+            if name == "Histologic_Type":
+                self.assertEqual("categorical", definition["optionTypes"])
+            else:
+                self.assertEqual([], definition["DxResultCls"])
+                self.assertEqual("free_text", definition["optionTypes"])
+
+    def test_histologic_type_is_classified_and_other_items_remain_free_text(self) -> None:
+        catalog = {
+            "Histologic_Type": {
+                **_definition("UDH", ["HE"]),
+                "DxResultCls": list(HISTOLOGIC_TYPE_CLASSES),
+            },
+            "ER_status": {
+                **_definition("unused", ["ER"]),
+                "DxResultCls": [],
+                "optionTypes": "free_text",
+            },
+        }
+        case = {
+            "case_id": "case-seven-class",
+            "hospital": "VGHTC",
+            "reports": [
+                {
+                    "report_id": "report-001",
+                    "raw_text": (
+                        "1. Histologic Type: Invasive ductal carcinoma.\n"
+                        "15. ER status: 95%."
+                    ),
+                }
+            ],
+            "dx_pairs": [],
+        }
+        ReportExtractionEngine(catalog, {"backend": "hospital_routed"}).fill_case(
+            case
+        )
+        results = {pair["dx_item"]: pair for pair in case["dx_pairs"]}
+        self.assertEqual("IC", results["Histologic_Type"]["dx_result"])
+        self.assertEqual(
+            "Invasive ductal carcinoma.",
+            results["Histologic_Type"]["dx_result_text"],
+        )
+        self.assertEqual("95%.", results["ER_status"]["dx_result"])
+
     def test_regex_extracts_items_and_stops_before_gross_description(self) -> None:
         report = """Prognostic and predictive factor:
 1. Histologic Type: Invasive carcinoma of no special type (ductal).
@@ -114,6 +196,28 @@ Gross description: Histologic Type: this must not replace the diagnosis.
         case = {"case_id": "case-001", "reports": [], "dx_pairs": [pair]}
         ReportExtractionEngine(catalog).fill_case(case)
         self.assertEqual([pair], case["dx_pairs"])
+
+    def test_existing_histologic_text_is_normalized_to_seven_class(self) -> None:
+        catalog = {
+            "Histologic_Type": {
+                **_definition("UDH", ["HE"]),
+                "DxResultCls": list(HISTOLOGIC_TYPE_CLASSES),
+            }
+        }
+        pair = {
+            "dx_pair_id": "case-001-dx-001",
+            "case_id": "case-001",
+            "source_report_id": "report-001",
+            "dx_item": "Histologic_Type",
+            "dx_result": "Invasive carcinoma of no special type",
+            "reference_wsi_ids": [],
+        }
+        case = {"case_id": "case-001", "reports": [], "dx_pairs": [pair]}
+        ReportExtractionEngine(catalog).fill_case(case)
+        self.assertEqual("IC", pair["dx_result"])
+        self.assertEqual(
+            "Invasive carcinoma of no special type", pair["dx_result_text"]
+        )
 
     def test_optional_medgemma_helpers_do_not_require_model_dependencies(self) -> None:
         self.assertEqual(["abcd", "cdef", "ef"], _chunks("abcdef", 4, 2))
