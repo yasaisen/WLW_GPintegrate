@@ -1,0 +1,462 @@
+"""Gemma 3 soft-prompt inference backend for Person A query generation.
+
+This module is the production inference boundary distilled from the Nano5
+training/evaluation programs.  It deliberately does not contain the training
+loop, patient reports, the base model, or the learned checkpoint.  Those large
+or controlled assets stay outside the repository and are mounted at runtime.
+"""
+
+from __future__ import annotations
+
+from copy import deepcopy
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+
+SOFT_PROMPT_MARKER = "<SOFT_PROMPT_INSERT>"
+
+
+class LearnableQueryGenerationError(ValueError):
+    """Raised when model inputs or generated attributes are not usable."""
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _flatten(document: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    flattened: dict[str, Any] = {}
+    for key, value in document.items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            flattened.update(_flatten(value, path))
+        else:
+            flattened[path] = value
+    return flattened
+
+
+def _node_types(document: dict[str, Any], prefix: str = "") -> dict[str, str]:
+    types: dict[str, str] = {}
+    for key, value in document.items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        types[path] = "object" if isinstance(value, dict) else "leaf"
+        if isinstance(value, dict):
+            types.update(_node_types(value, path))
+    return types
+
+
+def _add_allowed_values(destination: set[str], value: Any) -> None:
+    if value is None or value == "Not_Mentioned":
+        destination.add("Not_Mentioned")
+    elif isinstance(value, list):
+        destination.update(item for item in value if isinstance(item, str))
+    elif isinstance(value, str):
+        destination.add(value)
+
+
+def load_attribute_reference(
+    path: str | Path,
+) -> tuple[dict[str, Any], dict[str, set[str]], dict[str, str]]:
+    """Load the training attribute schema and its legal leaf vocabulary."""
+
+    source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(f"Attribute reference was not found: {source}")
+    raw = source.read_bytes()
+    chunks = json.loads(raw.decode("utf-8"))
+    if not isinstance(chunks, list) or not chunks:
+        raise LearnableQueryGenerationError(
+            "Attribute reference must be a non-empty JSON array"
+        )
+
+    attributes = [
+        item.get("attribute")
+        for item in chunks
+        if isinstance(item, dict) and isinstance(item.get("attribute"), dict)
+    ]
+    if not attributes:
+        raise LearnableQueryGenerationError(
+            "Attribute reference contains no attribute objects"
+        )
+
+    template = deepcopy(attributes[0])
+    expected_nodes = _node_types(template)
+    for index, attribute in enumerate(attributes[1:], start=1):
+        if _node_types(attribute) != expected_nodes:
+            raise LearnableQueryGenerationError(
+                f"Attribute schema differs in reference entry {index}"
+            )
+
+    allowed = {
+        leaf_path: {"Not_Mentioned"}
+        for leaf_path in _flatten(template)
+    }
+    for attribute in attributes:
+        for leaf_path, value in _flatten(attribute).items():
+            _add_allowed_values(allowed[leaf_path], value)
+
+    return template, allowed, {
+        "source_name": source.name,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+
+
+def parse_strict_json_object(text: str) -> dict[str, Any]:
+    """Require the complete generation to be exactly one JSON object."""
+
+    stripped = str(text or "").strip()
+    if not stripped:
+        raise LearnableQueryGenerationError("Model generated an empty response")
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise LearnableQueryGenerationError(
+            f"Model response is not strict JSON: {exc.msg} "
+            f"at line {exc.lineno} column {exc.colno}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise LearnableQueryGenerationError(
+            f"Model response root must be an object, not {type(parsed).__name__}"
+        )
+    return parsed
+
+
+def validate_generated_attributes(
+    generated: dict[str, Any],
+    template: dict[str, Any],
+    allowed_values: dict[str, set[str]],
+) -> None:
+    """Reject incomplete schemas, extra keys, and out-of-vocabulary values."""
+
+    expected_nodes = _node_types(template)
+    actual_nodes = _node_types(generated)
+    if actual_nodes != expected_nodes:
+        missing = sorted(set(expected_nodes) - set(actual_nodes))
+        unexpected = sorted(set(actual_nodes) - set(expected_nodes))
+        wrong_type = sorted(
+            path
+            for path in set(expected_nodes) & set(actual_nodes)
+            if expected_nodes[path] != actual_nodes[path]
+        )
+        raise LearnableQueryGenerationError(
+            "Generated Attribute schema is not exact; "
+            f"missing={missing}, unexpected={unexpected}, wrong_type={wrong_type}"
+        )
+
+    errors: list[str] = []
+    for path, value in _flatten(generated).items():
+        if value == "Not_Mentioned":
+            continue
+        if not isinstance(value, list) or not value:
+            errors.append(f"{path}: expected Not_Mentioned or a non-empty list")
+            continue
+        if any(not isinstance(item, str) for item in value):
+            errors.append(f"{path}: list contains a non-string value")
+            continue
+        if len(value) != len(set(value)):
+            errors.append(f"{path}: duplicate values are not allowed")
+        illegal = sorted(set(value) - allowed_values[path])
+        if illegal:
+            errors.append(f"{path}: values outside training vocabulary {illegal}")
+    if errors:
+        raise LearnableQueryGenerationError(
+            "Generated Attribute values are invalid: " + "; ".join(errors)
+        )
+
+
+def _chunk_text(chunks: list[dict[str, Any]]) -> str:
+    parts = []
+    for index, chunk in enumerate(chunks, start=1):
+        content = str(chunk.get("text", "") or "").strip()
+        if "Content:" in content:
+            content = content.split("Content:", 1)[1].strip()
+        if not content:
+            raise LearnableQueryGenerationError(
+                f"Retrieved chunk {index} has no text"
+            )
+        parts.append(f"<chunk{index}>\n{content}\n</chunk{index}>")
+    return "\n\n".join(parts)
+
+
+def _user_text(dx_text: str, chunks: list[dict[str, Any]]) -> str:
+    """Keep this prompt byte-for-byte aligned with Nano5 training."""
+
+    return (
+        f"DxText:\n{dx_text}\n\n"
+        f"ChunkText:\n{_chunk_text(chunks)}\n\n"
+        f"Task:\n"
+        f"Generate the Attribute JSON from DxText and ChunkText.\n"
+        f"Some retrieved chunks may be unrelated to DxText.\n"
+        f"Use only the chunks relevant to DxText and ignore unrelated chunks.\n"
+        f"Return the Attribute JSON object only.\n"
+        f"Use the same nested Attribute schema learned during training.\n"
+        f"Do not add markdown, explanation, or extra text.\n"
+        f"Start directly with {{.\n\n"
+        f"Attribute:\n{SOFT_PROMPT_MARKER}"
+    )
+
+
+class LearnableSoftPromptGenerator:
+    """Load Gemma and one learned prompt, then generate validated attributes."""
+
+    def __init__(self, config: dict[str, Any]):
+        self.config = deepcopy(config)
+        self.model_name = str(config["model_name"])
+        self.model_revision = config.get("model_revision") or None
+        self.checkpoint_path = Path(config["checkpoint_path"])
+        self.attribute_reference_path = Path(config["attribute_reference_path"])
+        self.required_chunk_count = int(config.get("required_chunk_count", 3))
+        self.max_input_len = int(config.get("max_input_len", 8192))
+        self.max_new_tokens = int(config.get("max_new_tokens", 768))
+        self.require_cuda = bool(config.get("require_cuda", True))
+        self.dtype_name = str(config.get("dtype", "auto"))
+        self.token_env = str(config.get("token_env", "HF_TOKEN"))
+
+        if self.required_chunk_count < 1:
+            raise ValueError("required_chunk_count must be positive")
+        if not self.checkpoint_path.is_file():
+            raise FileNotFoundError(
+                f"Soft-prompt checkpoint was not found: {self.checkpoint_path}"
+            )
+
+        (
+            self.attribute_template,
+            self.allowed_values,
+            reference_provenance,
+        ) = load_attribute_reference(self.attribute_reference_path)
+        self.provenance = {
+            "backend": "learnable_soft_prompt",
+            "model_name": self.model_name,
+            "model_revision": self.model_revision,
+            "checkpoint_name": self.checkpoint_path.name,
+            "checkpoint_sha256": _sha256(self.checkpoint_path),
+            "attribute_reference": reference_provenance,
+            "required_chunk_count": self.required_chunk_count,
+        }
+        self._torch: Any = None
+        self._tokenizer: Any = None
+        self._model: Any = None
+        self._soft_prompt: Any = None
+        self._soft_prompt_len: int | None = None
+        self._device: str | None = None
+
+    def _dtype(self, torch: Any, device: str) -> Any:
+        if self.dtype_name == "auto":
+            if device == "cpu":
+                return torch.float32
+            return (
+                torch.bfloat16
+                if torch.cuda.is_bf16_supported()
+                else torch.float16
+            )
+        choices = {
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+            "float32": torch.float32,
+        }
+        if self.dtype_name not in choices:
+            raise ValueError("dtype must be auto, float16, bfloat16 or float32")
+        return choices[self.dtype_name]
+
+    def _load(self) -> None:
+        if self._model is not None:
+            return
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+        except ImportError as exc:
+            raise RuntimeError(
+                "Learnable query generation requires torch and transformers"
+            ) from exc
+
+        cuda_available = torch.cuda.is_available()
+        if self.require_cuda and not cuda_available:
+            raise RuntimeError(
+                "Learnable query generation requires CUDA, but no GPU is visible"
+            )
+        device = "cuda" if cuda_available else "cpu"
+        dtype = self._dtype(torch, device)
+        token = os.environ.get(self.token_env)
+        common: dict[str, Any] = {}
+        if self.model_revision:
+            common["revision"] = self.model_revision
+        if token:
+            common["token"] = token
+
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name, **common)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            dtype=dtype,
+            **common,
+        ).to(device)
+        model.config.use_cache = True
+        model.eval()
+        for parameter in model.parameters():
+            parameter.requires_grad = False
+
+        checkpoint = torch.load(
+            self.checkpoint_path,
+            map_location="cpu",
+            weights_only=True,
+        )
+        soft_prompt = checkpoint.get("soft_prompt")
+        if soft_prompt is None or soft_prompt.ndim != 2:
+            raise LearnableQueryGenerationError(
+                "Checkpoint must contain a two-dimensional soft_prompt tensor"
+            )
+        checkpoint_model = checkpoint.get("model_name")
+        if checkpoint_model and checkpoint_model != self.model_name:
+            raise LearnableQueryGenerationError(
+                f"Checkpoint model {checkpoint_model!r} does not match "
+                f"configured model {self.model_name!r}"
+            )
+        embedding_size = model.get_input_embeddings().embedding_dim
+        if soft_prompt.shape[1] != embedding_size:
+            raise LearnableQueryGenerationError(
+                f"Checkpoint embedding width {soft_prompt.shape[1]} does not "
+                f"match model width {embedding_size}"
+            )
+        soft_prompt_len = int(
+            checkpoint.get("soft_prompt_len", soft_prompt.shape[0])
+        )
+        if soft_prompt_len != soft_prompt.shape[0]:
+            raise LearnableQueryGenerationError(
+                "Checkpoint soft_prompt_len does not match its tensor"
+            )
+
+        self.provenance.update(
+            {
+                "checkpoint_run_name": checkpoint.get("run_name"),
+                "checkpoint_epoch": checkpoint.get("current_epoch"),
+                "soft_prompt_len": soft_prompt_len,
+            }
+        )
+        self._torch = torch
+        self._tokenizer = tokenizer
+        self._model = model
+        self._soft_prompt = soft_prompt.to(
+            device=device,
+            dtype=model.get_input_embeddings().weight.dtype,
+        )
+        self._soft_prompt_len = soft_prompt_len
+        self._device = device
+
+    def _split_prompt(self, user_text: str) -> dict[str, Any]:
+        torch = self._torch
+        tokenizer = self._tokenizer
+        rendered = tokenizer.apply_chat_template(
+            [{"role": "user", "content": user_text}],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        if SOFT_PROMPT_MARKER not in rendered:
+            raise LearnableQueryGenerationError(
+                "Tokenizer chat template lost the soft-prompt insertion marker"
+            )
+        prefix_text, suffix_text = rendered.split(SOFT_PROMPT_MARKER, 1)
+        prefix_full = tokenizer(
+            prefix_text,
+            add_special_tokens=False,
+            padding=False,
+            return_tensors="pt",
+        )
+        suffix = tokenizer(
+            suffix_text,
+            add_special_tokens=False,
+            padding=False,
+            return_tensors="pt",
+        )
+        suffix_len = suffix["input_ids"].shape[-1]
+        max_prefix_len = max(
+            1,
+            self.max_input_len - suffix_len - int(self._soft_prompt_len),
+        )
+        old_side = tokenizer.truncation_side
+        tokenizer.truncation_side = "left"
+        try:
+            prefix = tokenizer(
+                prefix_text,
+                add_special_tokens=False,
+                truncation=True,
+                max_length=max_prefix_len,
+                padding=False,
+                return_tensors="pt",
+            )
+        finally:
+            tokenizer.truncation_side = old_side
+        if "attention_mask" not in prefix:
+            prefix["attention_mask"] = torch.ones_like(prefix["input_ids"])
+        if "attention_mask" not in suffix:
+            suffix["attention_mask"] = torch.ones_like(suffix["input_ids"])
+        return {"prefix": prefix, "suffix": suffix}
+
+    def generate(
+        self,
+        dx_text: str,
+        chunks: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not str(dx_text or "").strip():
+            raise LearnableQueryGenerationError("DxText is empty")
+        if len(chunks) != self.required_chunk_count:
+            raise LearnableQueryGenerationError(
+                f"The trained soft prompt requires exactly "
+                f"{self.required_chunk_count} chunks, received {len(chunks)}"
+            )
+        self._load()
+        torch = self._torch
+        model = self._model
+        tokenizer = self._tokenizer
+        device = self._device
+        encoded = self._split_prompt(_user_text(str(dx_text).strip(), chunks))
+        prefix_ids = encoded["prefix"]["input_ids"].to(device)
+        prefix_mask = encoded["prefix"]["attention_mask"].to(device)
+        suffix_ids = encoded["suffix"]["input_ids"].to(device)
+        suffix_mask = encoded["suffix"]["attention_mask"].to(device)
+        embedding = model.get_input_embeddings()
+        model_dtype = embedding.weight.dtype
+        prefix_embeds = embedding(prefix_ids).to(dtype=model_dtype)
+        suffix_embeds = embedding(suffix_ids).to(dtype=model_dtype)
+        soft_embeds = self._soft_prompt.unsqueeze(0).expand(
+            prefix_ids.size(0), -1, -1
+        )
+        inputs_embeds = torch.cat(
+            [prefix_embeds, soft_embeds, suffix_embeds], dim=1
+        )
+        soft_mask = torch.ones(
+            prefix_ids.size(0),
+            int(self._soft_prompt_len),
+            dtype=prefix_mask.dtype,
+            device=device,
+        )
+        attention_mask = torch.cat(
+            [prefix_mask, soft_mask, suffix_mask], dim=1
+        )
+        with torch.inference_mode():
+            generated_ids = model.generate(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+                use_cache=True,
+                eos_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+        generated_text = tokenizer.decode(
+            generated_ids[0], skip_special_tokens=True
+        )
+        generated = parse_strict_json_object(generated_text)
+        validate_generated_attributes(
+            generated,
+            self.attribute_template,
+            self.allowed_values,
+        )
+        return generated

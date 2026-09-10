@@ -1,6 +1,9 @@
 {
-  "component_version": "person-a/query-generation:0.3.0",
+  "component_version": "person-a/query-generation:0.7.0",
   "histologic_mapping_path": "/references/Histologic_Type_mappingTable.json",
   "candidate_reference_path": "/references/candidateReference.json",
-  "type_level_path": "/references/[typeLevel]visualAttrs_v1.2.1_2603241656.json"
+  "type_level_path": "/references/[typeLevel]visualAttrs_v1.2.1_2603241656.json",
+  "backend": {
+    "mode": "reference"
+  }
 }
