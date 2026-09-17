@@ -40,6 +40,11 @@ B 的 `payload.tables[]` 仍只包含：
 - 標準化表格：直接讀 `report_text`、`wsi_path`、`stain_type`、`block_id`、`dx_item` 與
   `dx_result` 等欄位。
 
+真實資料的通用輸入清單是 `integration/fixtures/input/B_report_tables.production.json`。
+它只指定兩種醫院 parser 與容器內的 `/data/reports`，不含報告內容或主機路徑；可隨程式
+提交。原本的 `integration/fixtures/input/B_report_tables.json` 仍供假資料測試使用，
+不要以真實資料清單覆蓋。
+
 院端 WSI 索引表尚未一起提供時，也支援直接 mount 目前交付的資料夾排列：
 
 ```text
