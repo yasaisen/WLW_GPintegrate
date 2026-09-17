@@ -42,8 +42,10 @@ B 的 `payload.tables[]` 仍只包含：
 
 真實資料的通用輸入清單是 `integration/fixtures/input/B_report_tables.production.json`。
 它只指定兩種醫院 parser 與容器內的 `/data/reports`，不含報告內容或主機路徑；可隨程式
-提交。原本的 `integration/fixtures/input/B_report_tables.json` 仍供假資料測試使用，
-不要以真實資料清單覆蓋。
+提交，並由 Person A Dockerfile 複製到 image 的 `/app/inputs/B_report_tables.production.json`。
+執行正式 B→D 時直接使用 `--input /app/inputs/B_report_tables.production.json`，
+不需要另外 mount B。原本的 `integration/fixtures/input/B_report_tables.json` 仍供假資料
+測試使用，不要以真實資料清單覆蓋。
 
 院端 WSI 索引表尚未一起提供時，也支援直接 mount 目前交付的資料夾排列：
 
@@ -132,20 +134,18 @@ docker build -f components/person_a/Dockerfile -t wlw/person-a:0.7.0 .
 
 ```powershell
 docker run --rm --gpus all `
-  -e HF_TOKEN `
-  -e HF_HOME=/models/huggingface `
-  -v "D:/WLW_data/raw:/data/raw:ro" `
-  -v "D:/WLW_data/wsi:/data/wsi:ro" `
-  -v "D:/WLW_models/huggingface:/models/huggingface" `
+  --env-file "D:/WLW_secrets/person-a.env" `
+  -v "D:/WLW_data/reports:/data/reports:ro" `
+  -v "wlw-hf-cache:/models/huggingface" `
   -v "D:/WLW_output:/outputs" `
   wlw/person-a:0.7.0 `
-  --input /data/raw/B_report_tables.json `
+  --input /app/inputs/B_report_tables.production.json `
   --output /outputs/D_dx_pairs_index.json `
   --config /app/components/person_a/configs/report_decompose.default.json
 ```
 
-raw directory 內的 B 可將 `table_path` 寫成 `/data/raw/VGHTC` 與 `/data/raw/CGMH`；院端
-`data_path` 必須指向容器內的 WSI mount，例如 `/data/wsi`。中央 Compose 如何提供相同 mounts，
+production B 已隨 image 提供，`table_path` 固定為 `/data/reports`；執行者只需把
+實際 Excel／WSI 資料夾唯讀掛到相同容器路徑。中央 Compose 如何提供資料 mount，
 由 integration 負責人接線。
 
 ## MedGemma 環境檢查

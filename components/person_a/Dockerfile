@@ -29,6 +29,8 @@ RUN python -m pip install --no-cache-dir --disable-pip-version-check \
 
 COPY contracts /app/contracts
 COPY components/person_a /app/components/person_a
+# This B manifest contains only parser types and container paths, not patient data.
+COPY integration/fixtures/input/B_report_tables.production.json /app/inputs/B_report_tables.production.json
 RUN touch /app/components/__init__.py \
     && mkdir -p /models/huggingface
 
