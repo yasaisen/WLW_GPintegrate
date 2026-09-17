@@ -40,6 +40,27 @@ B 的 `payload.tables[]` 仍只包含：
 - 標準化表格：直接讀 `report_text`、`wsi_path`、`stain_type`、`block_id`、`dx_item` 與
   `dx_result` 等欄位。
 
+院端 WSI 索引表尚未一起提供時，也支援直接 mount 目前交付的資料夾排列：
+
+```text
+/data/reports/
+├─ Pathology_Report_v1.xlsx
+├─ 乳癌病理報告_240927.xlsx
+├─ 乳癌病理報告_241220.xlsx
+├─ <CGMH anony_ID>/
+│  └─ *.ndpi
+└─ 中榮WSI/
+   └─ *.mrxs
+```
+
+- CGMH 以 Excel 的 `anony_ID` 找同名目錄，再以 `Path_ID`（也接受
+  `S2019-...` 對 `S19-...` 的舊檔名）篩選 WSI。檔名明示的
+  `ER/PR/HER2/KI67/HE` 轉成標準 stain；沒有 IHC 標記的 routine slide 視為 HE。
+- VGHTC 以 `病理序號` 對 WSI 檔名前綴，並依院端代碼
+  `H01/G54/G71/G7E/GAA` 轉成 `HE/ER/HER2/KI67/PR`。
+- 若正式 `Pathology_image_path_v1.csv`、`CGMH_list_total.xlsx` 或
+  `VGHTC_list_total_2.xlsx` 存在，仍優先使用正式索引表，不走檔名 fallback。
+
 報告、WSI 與模型權重都留在 Git repository 外；Docker 執行時由使用者或整合負責人以唯讀
 mount 提供。B 內的路徑必須是容器看得到的路徑，不是某位成員的 Windows home directory。
 目前約定的小型 candidate 定義沒有病人資料，隨 Person A 程式放在
@@ -99,7 +120,7 @@ fixture 已有結構化結果，因此不需要載入 MedGemma。正式 raw CGMH
 在 repository 根目錄建立 GitHub 規定的 Person A Dockerfile：
 
 ```powershell
-docker build -f components/person_a/Dockerfile -t wlw/person-a:0.6.0 .
+docker build -f components/person_a/Dockerfile -t wlw/person-a:0.7.0 .
 ```
 
 以下是單獨執行 B -> D 的示意；實際 host 路徑由執行機器決定：
@@ -112,7 +133,7 @@ docker run --rm --gpus all `
   -v "D:/WLW_data/wsi:/data/wsi:ro" `
   -v "D:/WLW_models/huggingface:/models/huggingface" `
   -v "D:/WLW_output:/outputs" `
-  wlw/person-a:0.6.0 `
+  wlw/person-a:0.7.0 `
   --input /data/raw/B_report_tables.json `
   --output /outputs/D_dx_pairs_index.json `
   --config /app/components/person_a/configs/report_decompose.default.json
@@ -129,7 +150,7 @@ raw directory 內的 B 可將 `table_path` 寫成 `/data/raw/VGHTC` 與 `/data/r
 ```powershell
 docker run --rm --gpus all `
   --entrypoint python `
-  wlw/person-a:0.6.0 `
+  wlw/person-a:0.7.0 `
   -m components.person_a.medgemma_smoke
 ```
 
@@ -140,7 +161,7 @@ docker run --rm --gpus all `
   -e HF_TOKEN `
   -v "D:/WLW_models/huggingface:/models/huggingface" `
   --entrypoint python `
-  wlw/person-a:0.6.0 `
+  wlw/person-a:0.7.0 `
   -m components.person_a.medgemma_smoke --load-model
 ```
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import logging
 from pathlib import Path
 import re
 from typing import Any
@@ -123,6 +124,7 @@ def _metadata_case(
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = cli_parser("甲: decompose report tables into per-case D.DxPairs").parse_args()
     report_tables = load_inputs(args.input, ["B.ReportTables"])["B.ReportTables"]
     config = load_config(args.config)

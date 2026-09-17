@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
+import json
+import logging
 import posixpath
 import re
 import zipfile
@@ -66,6 +68,9 @@ def iter_xlsx_records(
 
     workbook_path = Path(path)
     with zipfile.ZipFile(workbook_path) as archive:
+        logging.getLogger(__name__).info(json.dumps({
+            "event": "xlsx_open", "path": str(workbook_path),
+        }, ensure_ascii=True))
         shared_strings: list[str] = []
         if "xl/sharedStrings.xml" in archive.namelist():
             shared_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))

@@ -8,6 +8,7 @@ PyTorch/Transformers environment, GPU and Hugging Face credentials.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any
@@ -91,6 +92,7 @@ class MedGemmaExtractor:
         self.last_input_length = 0
         self.last_output_length = 0
         self.last_logits_diagnostics: dict[str, Any] = {}
+        self.generation_count = 0
 
     @staticmethod
     def _native_bf16_available(torch: Any) -> bool:
@@ -204,6 +206,15 @@ class MedGemmaExtractor:
         )
         self.model.config.pad_token_id = self.processor.tokenizer.pad_token_id
         self.model.eval()
+        logging.getLogger(__name__).info(json.dumps({
+            "event": "medgemma_loaded",
+            "model_id": self.model_id,
+            "configured_revision": self.model_revision,
+            "resolved_revision": getattr(self.model.config, "_commit_hash", None),
+            "quantization": "bitsandbytes-nf4-4bit" if self.load_in_4bit else "none",
+            "compute_dtype": str(dtype),
+            "cuda_available": torch.cuda.is_available(),
+        }))
 
     def _extract_chunk(self, chunk: str, items: list[str]) -> dict[str, str]:
         self._load()
@@ -270,6 +281,14 @@ class MedGemmaExtractor:
         self.last_output_length = sequences[0].shape[-1]
         self.last_generation_token_ids = sequences[0][input_length:].tolist()
         self.last_generated_text = generated
+        self.generation_count += 1
+        logging.getLogger(__name__).info(json.dumps({
+            "event": "medgemma_generate_complete",
+            "generate_call": self.generation_count,
+            "input_tokens": self.last_input_length,
+            "generated_tokens": len(self.last_generation_token_ids),
+            "items": items,
+        }))
         parsed = _json_object(generated)
         normalized = {_canonical_key(key): value for key, value in parsed.items()}
         return {

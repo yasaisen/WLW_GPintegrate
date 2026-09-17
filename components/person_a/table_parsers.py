@@ -15,6 +15,13 @@ from components.person_a.xlsx_reader import iter_xlsx_records
 SUPPORTED_TABLE_TYPES = {"VGHTC2024", "CGMH2019"}
 CGMH_REPORT_TEXT_FIELDS = ("pathology_report", "病理報告")
 WSI_EXTENSIONS = (".ndpi", ".mrxs", ".svs", ".tif", ".tiff")
+VGHTC_STAIN_CODES = {
+    "H01": "HE",
+    "G54": "ER",
+    "G71": "HER2",
+    "G7E": "KI67",
+    "GAA": "PR",
+}
 
 
 @dataclass(frozen=True)
@@ -227,6 +234,63 @@ def _match_case_id(filename: str, case_ids: list[str]) -> tuple[str, str] | None
     return None
 
 
+def _slide_files(directory: Path) -> list[Path]:
+    """Return only real WSI entry files, not MRXS companion data files."""
+
+    if not directory.is_dir():
+        return []
+    return sorted(
+        path
+        for path in directory.rglob("*")
+        if path.is_file() and path.suffix.lower() in WSI_EXTENSIONS
+    )
+
+
+def _vghtc_stain_from_filename(filename: str) -> str:
+    stem = _without_wsi_extension(Path(filename).name)
+    fields = [field.strip().upper() for field in stem.split(",")]
+    return VGHTC_STAIN_CODES.get(fields[1], "UNKNOWN") if len(fields) > 1 else "UNKNOWN"
+
+
+def _cgmh_case_aliases(case_id: str) -> list[str]:
+    aliases = [case_id]
+    match = re.fullmatch(r"S20(\d{2}-.*)", case_id, re.IGNORECASE)
+    if match:
+        aliases.append(f"S{match.group(1)}")
+    return aliases
+
+
+def _cgmh_stain_from_filename(filename: str) -> str:
+    stem = _without_wsi_extension(Path(filename).name)
+    if re.search(r"HER\s*[-_]?\s*2\s*(?:NEU)?", stem, re.IGNORECASE):
+        return "HER2"
+    if re.search(r"KI\s*[-_]?\s*67", stem, re.IGNORECASE):
+        return "KI67"
+    for marker in ("ER", "PR", "HE"):
+        if re.search(rf"(?:^|[\s_-]){marker}(?:[\s_-]|$)", stem, re.IGNORECASE):
+            return marker
+    # Routine H&E slide names in the mounted CGMH sample do not always carry
+    # an explicit "HE" token; named ER/PR/HER2/KI67 files are handled above.
+    return "HE"
+
+
+def _cgmh_filename_match(filename: str, case_id: str) -> tuple[str, str] | None:
+    stem = _without_wsi_extension(Path(filename).name).strip()
+    for alias in _cgmh_case_aliases(case_id):
+        if not stem.casefold().startswith(alias.casefold()):
+            continue
+        remainder = stem[len(alias) :].strip()
+        if not remainder:
+            return stem, ""
+        if _cgmh_stain_from_filename(stem) != "HE" or re.match(
+            r"^HE(?:[\s_-]|$)", remainder, re.IGNORECASE
+        ):
+            return stem, ""
+        block_id = re.split(r"[-\s_]", remainder, maxsplit=1)[0].strip()
+        return stem, block_id
+    return None
+
+
 def _parse_vghtc_directory(
     source_dir: Path, table_idx: int, cases: dict[str, dict[str, Any]]
 ) -> None:
@@ -253,30 +317,46 @@ def _parse_vghtc_directory(
     data_paths = _read_data_paths(source_dir)
     base_root = Path(os.path.commonpath(data_paths)) if data_paths else source_dir
     wsi_table = source_dir / "VGHTC_list_total_2.xlsx"
-    for _, _, record in iter_xlsx_records(wsi_table):
-        filename = _first(record, ["file_name"])
-        match = _match_case_id(filename, case_ids)
-        if not filename or match is None:
-            continue
-        case_id, block_id = match
-        relative_dir = _first(record, ["file_path"])
-        full_name = _filename_with_extension(filename, ".mrxs")
-        directory = _portable_path(relative_dir)
-        if not directory.is_absolute():
-            directory = base_root / directory
-        _add_wsi(
-            cases[case_id],
-            filename,
-            _first(record, ["stain"]),
-            str(directory / full_name),
-            block_id,
-        )
+    if wsi_table.is_file():
+        for _, _, record in iter_xlsx_records(wsi_table):
+            filename = _first(record, ["file_name"])
+            match = _match_case_id(filename, case_ids)
+            if not filename or match is None:
+                continue
+            case_id, block_id = match
+            relative_dir = _first(record, ["file_path"])
+            full_name = _filename_with_extension(filename, ".mrxs")
+            directory = _portable_path(relative_dir)
+            if not directory.is_absolute():
+                directory = base_root / directory
+            _add_wsi(
+                cases[case_id],
+                filename,
+                _first(record, ["stain"]),
+                str(directory / full_name),
+                block_id,
+            )
+    else:
+        for slide_path in _slide_files(source_dir / "中榮WSI"):
+            filename = _without_wsi_extension(slide_path.name)
+            match = _match_case_id(filename, case_ids)
+            if match is None:
+                continue
+            case_id, block_id = match
+            _add_wsi(
+                cases[case_id],
+                filename,
+                _vghtc_stain_from_filename(filename),
+                str(slide_path),
+                block_id,
+            )
 
 
 def _parse_cgmh_directory(
     source_dir: Path, table_idx: int, cases: dict[str, dict[str, Any]]
 ) -> None:
     source_case_ids: set[str] = set()
+    anonymous_directory_by_case: dict[str, str] = {}
     report_path = source_dir / "Pathology_Report_v1.xlsx"
     for sheet_name, row_number, record in iter_xlsx_records(report_path):
         case_id = _first(record, ["Path_ID"])
@@ -286,6 +366,9 @@ def _parse_cgmh_directory(
         report_text = _first(record, CGMH_REPORT_TEXT_FIELDS)
         if case_id and report_text:
             source_case_ids.add(case_id)
+            anonymous_directory = _first(record, ["anony_ID"])
+            if anonymous_directory:
+                anonymous_directory_by_case[case_id] = anonymous_directory
             case = _case(cases, case_id, "CGMH")
             _add_report(
                 case,
@@ -300,39 +383,55 @@ def _parse_cgmh_directory(
 
     stains_by_filename: dict[str, str] = {}
     wsi_table = source_dir / "CGMH_list_total.xlsx"
-    for _, _, record in iter_xlsx_records(wsi_table):
-        filename = _without_wsi_extension(_first(record, ["file_name"])).strip()
-        if filename:
-            stains_by_filename[filename] = _first(record, ["stain"])
+    if wsi_table.is_file():
+        for _, _, record in iter_xlsx_records(wsi_table):
+            filename = _without_wsi_extension(_first(record, ["file_name"])).strip()
+            if filename:
+                stains_by_filename[filename] = _first(record, ["stain"])
 
     image_table = source_dir / "Pathology_image_path_v1.csv"
-    with image_table.open("r", encoding="utf-8-sig", newline="") as stream:
-        records = csv.DictReader(stream)
-        for record in records:
-            case_id = _first(record, ["Path_ID"])
-            if case_id not in source_case_ids:
-                continue
-            filename = _first(record, ["WSI_name"])
-            if not filename:
-                continue
-            # The CGMH codebook defines the on-disk layout as
-            # <data_path>/<anony_ID>/<WSI_name>.  ``image_path`` is a Windows-style
-            # legacy location and must not be appended to the Linux mount path.
-            relative_dir = _first(record, ["anony_ID"])
-            if not relative_dir:
-                relative_dir = _portable_path(_first(record, ["image_path"])).name
-            directory = _portable_path(relative_dir)
-            if not directory.is_absolute():
-                directory = base_root / directory
-            filename_key = _without_wsi_extension(filename).strip()
-            block_id = filename_key[len(case_id) :].strip().split("-", 1)[0]
-            _add_wsi(
-                cases[case_id],
-                filename_key,
-                stains_by_filename.get(filename_key, "UNKNOWN"),
-                str(directory / filename),
-                block_id,
-            )
+    if image_table.is_file():
+        with image_table.open("r", encoding="utf-8-sig", newline="") as stream:
+            records = csv.DictReader(stream)
+            for record in records:
+                case_id = _first(record, ["Path_ID"])
+                if case_id not in source_case_ids:
+                    continue
+                filename = _first(record, ["WSI_name"])
+                if not filename:
+                    continue
+                # The CGMH codebook defines the on-disk layout as
+                # <data_path>/<anony_ID>/<WSI_name>.  ``image_path`` is a Windows-style
+                # legacy location and must not be appended to the Linux mount path.
+                relative_dir = _first(record, ["anony_ID"])
+                if not relative_dir:
+                    relative_dir = _portable_path(_first(record, ["image_path"])).name
+                directory = _portable_path(relative_dir)
+                if not directory.is_absolute():
+                    directory = base_root / directory
+                filename_key = _without_wsi_extension(filename).strip()
+                block_id = filename_key[len(case_id) :].strip().split("-", 1)[0]
+                _add_wsi(
+                    cases[case_id],
+                    filename_key,
+                    stains_by_filename.get(filename_key, "UNKNOWN"),
+                    str(directory / filename),
+                    block_id,
+                )
+    else:
+        for case_id, anonymous_directory in anonymous_directory_by_case.items():
+            for slide_path in _slide_files(source_dir / anonymous_directory):
+                match = _cgmh_filename_match(slide_path.name, case_id)
+                if match is None:
+                    continue
+                filename_key, block_id = match
+                _add_wsi(
+                    cases[case_id],
+                    filename_key,
+                    _cgmh_stain_from_filename(filename_key),
+                    str(slide_path),
+                    block_id,
+                )
 
 
 def _finalize_cases(cases: dict[str, dict[str, Any]]) -> ParsedReportTables:

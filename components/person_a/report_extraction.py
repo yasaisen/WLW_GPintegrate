@@ -10,6 +10,8 @@ future server-side table sources.
 from __future__ import annotations
 
 import re
+import json
+import logging
 from typing import Any
 
 from components.person_a.histologic_type_classifier import classify_histologic_type
@@ -307,6 +309,7 @@ class ReportExtractionEngine:
         )
         self._catalog_by_key = {_key(name): name for name in catalog}
         self._medgemma: Any | None = None
+        self._audit_context: dict[str, str] = {}
 
         configured_names = self.config.get("item_name_map", {})
         self.item_name_map: dict[str, str] = {}
@@ -317,6 +320,12 @@ class ReportExtractionEngine:
                     "is not present in DxStructuredCandidates_integrated.json"
                 )
             self.item_name_map[_key(source_name)] = target_name
+
+    def _audit(self, event: str, **details: Any) -> None:
+        # Record routing and counts, never report text, generated text or credentials.
+        logging.getLogger(__name__).info(json.dumps(
+            {"event": event, **self._audit_context, **details}, ensure_ascii=True
+        ))
 
     def _catalog_name(self, extracted_name: str) -> str | None:
         normalized = _key(extracted_name)
@@ -343,7 +352,16 @@ class ReportExtractionEngine:
             from components.person_a.medgemma_extractor import MedGemmaExtractor
 
             self._medgemma = MedGemmaExtractor(self.config.get("medgemma", {}))
-        return self._medgemma.extract(report_text, items or self._medgemma_items())
+        requested = items or self._medgemma_items()
+        before = getattr(self._medgemma, "generation_count", 0)
+        self._audit("medgemma_start", items=requested)
+        result = self._medgemma.extract(report_text, requested)
+        self._audit(
+            "medgemma_complete", items=requested,
+            nonempty_items=[key for key, value in result.items() if value],
+            generate_calls=getattr(self._medgemma, "generation_count", 0) - before,
+        )
+        return result
 
     def _extract_cgmh_report(self, report_text: str) -> dict[str, str]:
         """Implement the confirmed CGMH fallback flow.
@@ -355,6 +373,7 @@ class ReportExtractionEngine:
         """
 
         regex_items = extract_cgmh_items(report_text)
+        self._audit("regex_complete", hospital="CGMH", items=list(regex_items))
         if not regex_items:
             return self._medgemma_extract(report_text)
 
@@ -378,7 +397,9 @@ class ReportExtractionEngine:
         if self.backend == "hospital_routed":
             if hospital == "VGHTC":
                 # VGHTC is deliberately regex-only.  Never load MedGemma here.
-                return extract_vghtc_items(report_text)
+                result = extract_vghtc_items(report_text)
+                self._audit("regex_complete", hospital="VGHTC", items=list(result))
+                return result
             if hospital == "CGMH":
                 return self._extract_cgmh_report(report_text)
             raise ValueError(f"Unsupported hospital for report extraction: {hospital!r}")
@@ -458,6 +479,12 @@ class ReportExtractionEngine:
 
         extracted_by_item: dict[str, dict[str, str]] = {}
         for report in case["reports"]:
+            self._audit_context = {
+                "case_id": case["case_id"],
+                "report_id": report["report_id"],
+                "hospital": case.get("hospital", ""),
+            }
+            self._audit("report_extraction_start", backend=self.backend)
             for extracted_name, raw_value in self._extract_report(
                 report["raw_text"], case.get("hospital", "")
             ).items():
