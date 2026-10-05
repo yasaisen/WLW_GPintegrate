@@ -1,0 +1,324 @@
+{
+  "contract": "E.ROIs",
+  "schema_version": "2.0",
+  "artifact_id": "E-example-c-001",
+  "case_id": "example-c-001",
+  "producer": "person-c/example",
+  "payload": {
+    "data_mode": "inference",
+    "DxItem_list": [
+      "Example_Diagnostic_Item"
+    ],
+    "reference_versions": {
+      "interest_pattern": {
+        "region": {
+          "vocab": "BCSS"
+        },
+        "roi": {
+          "target_mpp": 0.5,
+          "min_region_area_px": 262144,
+          "max_rois_per_stain": 256,
+          "max_main_side_px": 2048
+        }
+      }
+    },
+    "case_list": [
+      {
+        "sample_idx": 0,
+        "case_id": "example-c-001",
+        "hospital": "EXAMPLE",
+        "patient_info": {},
+        "date": "",
+        "source": {
+          "fixture": "synthetic"
+        },
+        "organ": "Breast",
+        "report_raw_content": "Synthetic report text for the person_c example.",
+        "tissue_blocks": [
+          {
+            "block_id": "A",
+            "stains": [
+              {
+                "stain_id": "example-c-001-he",
+                "stain_type": "HE",
+                "filename": "example-he.svs",
+                "filepath": "/example/example-he.svs",
+                "memo": "processed (HE)",
+                "roi_list": [
+                  {
+                    "roi_id": "example-c-001-he-roi-00000",
+                    "global_idx": 0,
+                    "local_idx": 0,
+                    "level0_info": {
+                      "area": 1761100,
+                      "coords_seg": null,
+                      "cxcywh": [
+                        1800.5,
+                        2550.0,
+                        1601,
+                        1100
+                      ],
+                      "mpp": 0.25,
+                      "roi_path": null,
+                      "roi_wh": [
+                        1601,
+                        1100
+                      ],
+                      "xywh": [
+                        1000,
+                        2000,
+                        1601,
+                        1100
+                      ]
+                    },
+                    "main_info": {
+                      "area": 440000,
+                      "coords_seg": null,
+                      "cxcywh": [
+                        900.0,
+                        1275.0,
+                        800,
+                        550
+                      ],
+                      "mpp": 0.5,
+                      "roi_path": null,
+                      "roi_wh": [
+                        800,
+                        550
+                      ],
+                      "xywh": [
+                        500,
+                        1000,
+                        800,
+                        550
+                      ]
+                    },
+                    "DxPair": null,
+                    "visualAttrs": null,
+                    "visualAttrs_info": null,
+                    "selection_history": [
+                      {
+                        "stage": "interest_pattern_extraction",
+                        "owner": "person_C",
+                        "artifact_contract": "E.ROIs",
+                        "action": "candidate_generated",
+                        "status": "selected",
+                        "selected": true,
+                        "reason": "interest_pattern_candidate_generated",
+                        "producer": "person-c/example"
+                      }
+                    ]
+                  },
+                  {
+                    "roi_id": "example-c-001-he-roi-00001",
+                    "global_idx": 1,
+                    "local_idx": 1,
+                    "level0_info": {
+                      "area": 7800000,
+                      "coords_seg": null,
+                      "cxcywh": [
+                        4000.0,
+                        4200.0,
+                        3000,
+                        2600
+                      ],
+                      "mpp": 0.25,
+                      "roi_path": null,
+                      "roi_wh": [
+                        3000,
+                        2600
+                      ],
+                      "xywh": [
+                        2500,
+                        2900,
+                        3000,
+                        2600
+                      ]
+                    },
+                    "main_info": {
+                      "area": 1950000,
+                      "coords_seg": null,
+                      "cxcywh": [
+                        2000.0,
+                        2100.0,
+                        1500,
+                        1300
+                      ],
+                      "mpp": 0.5,
+                      "roi_path": null,
+                      "roi_wh": [
+                        1500,
+                        1300
+                      ],
+                      "xywh": [
+                        1250,
+                        1450,
+                        1500,
+                        1300
+                      ]
+                    },
+                    "DxPair": null,
+                    "visualAttrs": null,
+                    "visualAttrs_info": null,
+                    "selection_history": [
+                      {
+                        "stage": "interest_pattern_extraction",
+                        "owner": "person_C",
+                        "artifact_contract": "E.ROIs",
+                        "action": "candidate_generated",
+                        "status": "selected",
+                        "selected": true,
+                        "reason": "interest_pattern_candidate_generated",
+                        "producer": "person-c/example"
+                      }
+                    ]
+                  },
+                  {
+                    "roi_id": "example-c-001-he-roi-00002",
+                    "global_idx": 2,
+                    "local_idx": 2,
+                    "level0_info": {
+                      "area": 240000000,
+                      "coords_seg": null,
+                      "cxcywh": [
+                        16000.0,
+                        12000.0,
+                        20000,
+                        12000
+                      ],
+                      "mpp": 0.25,
+                      "roi_path": null,
+                      "roi_wh": [
+                        20000,
+                        12000
+                      ],
+                      "xywh": [
+                        6000,
+                        6000,
+                        20000,
+                        12000
+                      ]
+                    },
+                    "main_info": {
+                      "area": 2516992,
+                      "coords_seg": null,
+                      "cxcywh": [
+                        1638.0,
+                        1228.5,
+                        2048,
+                        1229
+                      ],
+                      "mpp": 2.44140625,
+                      "roi_path": null,
+                      "roi_wh": [
+                        2048,
+                        1229
+                      ],
+                      "xywh": [
+                        614,
+                        614,
+                        2048,
+                        1229
+                      ]
+                    },
+                    "DxPair": null,
+                    "visualAttrs": null,
+                    "visualAttrs_info": null,
+                    "selection_history": [
+                      {
+                        "stage": "interest_pattern_extraction",
+                        "owner": "person_C",
+                        "artifact_contract": "E.ROIs",
+                        "action": "candidate_generated",
+                        "status": "selected",
+                        "selected": true,
+                        "reason": "interest_pattern_candidate_generated",
+                        "producer": "person-c/example"
+                      }
+                    ]
+                  },
+                  {
+                    "roi_id": "example-c-001-he-roi-00003",
+                    "global_idx": 3,
+                    "local_idx": 3,
+                    "level0_info": {
+                      "area": 1000000,
+                      "coords_seg": null,
+                      "cxcywh": [
+                        29500.0,
+                        19500.0,
+                        1000,
+                        1000
+                      ],
+                      "mpp": 0.25,
+                      "roi_path": null,
+                      "roi_wh": [
+                        1000,
+                        1000
+                      ],
+                      "xywh": [
+                        29000,
+                        19000,
+                        1000,
+                        1000
+                      ]
+                    },
+                    "main_info": {
+                      "area": 250000,
+                      "coords_seg": null,
+                      "cxcywh": [
+                        14750.0,
+                        9750.0,
+                        500,
+                        500
+                      ],
+                      "mpp": 0.5,
+                      "roi_path": null,
+                      "roi_wh": [
+                        500,
+                        500
+                      ],
+                      "xywh": [
+                        14500,
+                        9500,
+                        500,
+                        500
+                      ]
+                    },
+                    "DxPair": null,
+                    "visualAttrs": null,
+                    "visualAttrs_info": null,
+                    "selection_history": [
+                      {
+                        "stage": "interest_pattern_extraction",
+                        "owner": "person_C",
+                        "artifact_contract": "E.ROIs",
+                        "action": "candidate_generated",
+                        "status": "selected",
+                        "selected": true,
+                        "reason": "interest_pattern_candidate_generated",
+                        "producer": "person-c/example"
+                      }
+                    ]
+                  }
+                ],
+                "roi_num": 4
+              },
+              {
+                "stain_id": "example-c-001-ihc",
+                "stain_type": "IHC",
+                "filename": "example-ihc.svs",
+                "filepath": "/example/example-ihc.svs",
+                "memo": "not processed (stain_types=[HE])",
+                "roi_list": [],
+                "roi_num": 0
+              }
+            ],
+            "memo": ""
+          }
+        ],
+        "memo": ""
+      }
+    ]
+  }
+}

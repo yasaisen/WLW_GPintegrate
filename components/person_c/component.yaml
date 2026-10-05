@@ -1,10 +1,19 @@
 name: person_c_interest_pattern
 owner: person_C
-version: example-stub-0.1.0
+version: 0.1.0
 inputs: [CaseListInput@1.0]
 outputs: [E.ROIs@2.0]
 runtime:
   python: "3.12"
-  gpu: false
+  cuda: "13.0"
+  gpu: true
+  gpu_count_min: 1
+  vram_gb_min: 5         # measured: 4.7 GB allocated, one 28777x34620 slide
+  cpu: 8                 # job used 8 CPUs
+  memory_gb: 48          # measured peak RSS 10.9 GB (28777x34620 slide), 42.6 GB (61879x70581 slide)
+  timeout_seconds: null  # 73 s and 216 s on the two slides measured; larger slides not measured
+models:
+  - name: conch_ViT-B-16
+    configured_by: configs/region_proposal.json:region.conch_checkpoint
 entrypoint: python -m components.person_c.interest_pattern
-status: example_stub_not_for_research_use
+status: integration_draft   # configs/example.json keeps the contract-only stub (mode=example)

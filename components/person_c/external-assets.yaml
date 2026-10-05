@@ -1,0 +1,28 @@
+assets:
+  - asset_id: conch-vit-b-16
+    type: model_weight
+    required: true
+    version: "conch_ViT-B-16"
+    sha256: "40a9644b9ba0e83a74576e0a5e5f7313599fa9c9cdaf3c20f8a3e271b0e9ae7c"
+    size_bytes: 802235437
+    license_or_access_policy: "MahmoodLab/CONCH gated access (CC-BY-NC-ND 4.0); do not redistribute"
+    contains_phi: false
+    configured_by: "configs/region_proposal.json:region.conch_checkpoint"
+    mount_path: "reference/person_c/checkpoint/conch/pytorch_model.bin"
+
+  - asset_id: conch-library
+    type: code
+    required: true
+    version: "unpinned (copied from a local clone; pin the upstream commit before delivery)"
+    contains_phi: false
+    configured_by: "configs/region_proposal.json:region.conch_lib_path"
+    mount_path: "reference/person_c/template_ref/CONCH"
+
+  - asset_id: bcss-zero-shot-vocab
+    type: template_ref
+    required: true
+    version: "bcss_vocab.json"
+    sha256: "47ea2b920bb73dfd43e9f3b9892fab20b80e6812902a9b914b6986f13166aa62"
+    contains_phi: false
+    configured_by: "configs/region_proposal.json:region.vocab_json"
+    mount_path: "reference/person_c/template_ref/bcss_vocab.json"
