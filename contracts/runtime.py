@@ -12,9 +12,12 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+from contracts.paths import resolve_component_config_path, resolve_run_path
+
 
 ROOT = Path(__file__).resolve().parent
 SCHEMA_DIR = ROOT / "schemas"
+CASE_LIST_SCHEMA = SCHEMA_DIR / "case_list_input.schema.json"
 
 CONTRACT_SCHEMAS = {
     "A.Literature": "A_literature.schema.json",
@@ -195,6 +198,35 @@ def validate_artifact(artifact: dict[str, Any], expected_contract: str | None = 
     _validate_selection_semantics(artifact)
 
 
+def validate_case_list_input(document: Any, *, single_case: bool = False) -> None:
+    """Validate the table-independent framework input and identity invariants."""
+
+    schema = json.loads(CASE_LIST_SCHEMA.read_text(encoding="utf-8"))
+    _validate(document, schema, root_schema=schema, schema_directory=SCHEMA_DIR)
+    if not isinstance(document, dict):
+        raise ContractError("$: CaseList input must be an object")
+    dx_items = document["DxItem_list"]
+    if len(dx_items) != len(set(dx_items)):
+        raise ContractError("$.DxItem_list: duplicate diagnostic item names")
+    cases = document["case_list"]
+    if single_case and len(cases) != 1:
+        raise ContractError(f"$.case_list: expected exactly one case, got {len(cases)}")
+    case_ids = [case["case_id"] for case in cases]
+    if len(case_ids) != len(set(case_ids)):
+        raise ContractError("$.case_list: duplicate case_id values")
+    for case_index, case in enumerate(cases):
+        stain_ids: set[str] = set()
+        for block_index, block in enumerate(case["tissue_blocks"]):
+            for stain in block["stains"]:
+                stain_id = stain["stain_id"]
+                if stain_id in stain_ids:
+                    raise ContractError(
+                        f"$.case_list[{case_index}].tissue_blocks[{block_index}]: "
+                        f"duplicate stain_id {stain_id!r}"
+                    )
+                stain_ids.add(stain_id)
+
+
 def _validate_selection_semantics(artifact: dict[str, Any]) -> None:
     """Validate cross-field ROI event invariants not expressed by the demo validator."""
 
@@ -295,7 +327,7 @@ def _validate_selection_semantics(artifact: dict[str, Any]) -> None:
 def load_inputs(paths: Iterable[str | Path], required_contracts: Iterable[str]) -> dict[str, dict[str, Any]]:
     artifacts: dict[str, dict[str, Any]] = {}
     for raw_path in paths:
-        path = Path(raw_path)
+        path = resolve_run_path(raw_path)
         artifact = json.loads(path.read_text(encoding="utf-8"))
         validate_artifact(artifact)
         contract = artifact["contract"]
@@ -313,13 +345,39 @@ def load_inputs(paths: Iterable[str | Path], required_contracts: Iterable[str]) 
     return artifacts
 
 
+def load_case_list_input(path: str | Path, *, single_case: bool = False) -> dict[str, Any]:
+    resolved = resolve_run_path(path)
+    document = json.loads(resolved.read_text(encoding="utf-8"))
+    validate_case_list_input(document, single_case=single_case)
+    return document
+
+
+def write_case_list_input(
+    document: dict[str, Any],
+    output: str | Path,
+    *,
+    single_case: bool = True,
+) -> None:
+    """Write a canonical CaseList below run/.
+
+    Component handoffs use the single-case default. The upstream B-to-CaseList
+    adapter explicitly opts into a multi-case batch for pipeline fan-out.
+    """
+
+    validate_case_list_input(document, single_case=single_case)
+    path = resolve_run_path(output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def load_config(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    config_path = resolve_component_config_path(path)
+    return json.loads(config_path.read_text(encoding="utf-8"))
 
 
 def write_artifact(artifact: dict[str, Any], output: str | Path, expected_contract: str) -> None:
     validate_artifact(artifact, expected_contract)
-    path = Path(output)
+    path = resolve_run_path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {expected_contract} -> {path}")

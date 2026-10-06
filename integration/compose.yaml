@@ -1,88 +1,62 @@
-name: wlw-integration-demo
+name: wlw-contract-example
 
 x-common: &common
   user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
   volumes:
-    - ./fixtures/input:/inputs:ro
-    - ./configs:/configs:ro
-    - ./artifacts:/artifacts
-    - ../../../lab_19/DxStructuredCandidates_integrated.json:/references/DxStructuredCandidates_integrated.json:ro
-    - ../../../lab_19/reference/candidateReference.json:/references/candidateReference.json:ro
-    - ../../Histologic_Type_mappingTable.json:/references/Histologic_Type_mappingTable.json:ro
-    - ../../[typeLevel]visualAttrs_v1.2.1_2603241656.json:/references/[typeLevel]visualAttrs_v1.2.1_2603241656.json:ro
-    - ../../cleanSections_metaList_2603201640.json:/literature-source/cleanSections_metaList_2603201640.json:ro
+    - ../../reference:/reference:ro
+    - ../../run:/run
 
 services:
-  literature-prepare:
-    <<: *common
-    image: wlw/person-b:demo
-    build:
-      context: ..
-      dockerfile: components/person_b/Dockerfile
-    entrypoint: ["python", "-m", "components.person_b.prepare_literature"]
-    command:
-      - --source
-      - /literature-source/cleanSections_metaList_2603201640.json
-      - --output
-      - /artifacts/A_literature.json
-      - --config
-      - /configs/prepare_literature.json
-
   report-decompose:
     <<: *common
-    image: wlw/person-a:demo
+    image: wlw/person-a:example
     build:
       context: ..
       dockerfile: components/person_a/Dockerfile
     command:
       - --input
-      - /inputs/B_report_tables.json
+      - /run/input/pipeline/cases.json
       - --output
-      - /artifacts/D_dx_pairs_index.json
+      - /run/output/pipeline/cases/example-case/D_dx_pairs.json
       - --config
-      - /configs/report_decompose.json
+      - /app/components/person_a/configs/example.json
 
   interest-pattern:
     <<: *common
-    image: wlw/person-c:demo
+    image: wlw/person-c:example
     build:
       context: ..
       dockerfile: components/person_c/Dockerfile
-    depends_on:
-      report-decompose:
-        condition: service_completed_successfully
     command:
       - --input
-      - /artifacts/cases/case-001/D_dx_pairs.json
+      - /run/input/pipeline/cases.json
       - --output
-      - /artifacts/cases/case-001/E_rois.json
+      - /run/output/pipeline/cases/example-case/E_rois.json
       - --config
-      - /configs/interest_pattern.json
+      - /app/components/person_c/configs/example.json
 
   knowledge-retrieval:
     <<: *common
-    image: wlw/person-b:demo
+    image: wlw/person-b:example
     build:
       context: ..
       dockerfile: components/person_b/Dockerfile
     depends_on:
-      literature-prepare:
-        condition: service_completed_successfully
       report-decompose:
         condition: service_completed_successfully
     command:
       - --input
-      - /artifacts/A_literature.json
+      - /run/input/pipeline/A_literature.json
       - --input
-      - /artifacts/cases/case-001/D_dx_pairs.json
+      - /run/output/pipeline/cases/example-case/D_dx_pairs.json
       - --output
-      - /artifacts/cases/case-001/F_chunks.json
+      - /run/output/pipeline/cases/example-case/F_chunks.json
       - --config
-      - /configs/knowledge_retrieval.json
+      - /app/components/person_b/configs/example.json
 
   query-generation:
     <<: *common
-    image: wlw/person-a:demo
+    image: wlw/person-a:example
     build:
       context: ..
       dockerfile: components/person_a/Dockerfile
@@ -92,17 +66,17 @@ services:
         condition: service_completed_successfully
     command:
       - --input
-      - /artifacts/cases/case-001/D_dx_pairs.json
+      - /run/output/pipeline/cases/example-case/D_dx_pairs.json
       - --input
-      - /artifacts/cases/case-001/F_chunks.json
+      - /run/output/pipeline/cases/example-case/F_chunks.json
       - --output
-      - /artifacts/cases/case-001/G_queries.json
+      - /run/output/pipeline/cases/example-case/G_queries.json
       - --config
-      - /configs/query_generation.json
+      - /app/components/person_a/configs/example.json
 
   visual-filter:
     <<: *common
-    image: wlw/person-d:demo
+    image: wlw/person-d:example
     build:
       context: ..
       dockerfile: components/person_d/Dockerfile
@@ -113,13 +87,13 @@ services:
         condition: service_completed_successfully
     command:
       - --input
-      - /artifacts/cases/case-001/E_rois.json
+      - /run/output/pipeline/cases/example-case/E_rois.json
       - --input
-      - /artifacts/cases/case-001/G_queries.json
+      - /run/output/pipeline/cases/example-case/G_queries.json
       - --output
-      - /artifacts/cases/case-001/H_matches.json
+      - /run/output/pipeline/cases/example-case/H_matches.json
       - --config
-      - /configs/visual_filter.json
+      - /app/components/person_d/configs/example.json
 
   clee:
     <<: *common
@@ -134,10 +108,10 @@ services:
         condition: service_completed_successfully
     command:
       - --input
-      - /artifacts/cases/case-001/D_dx_pairs.json
+      - /run/output/pipeline/cases/example-case/D_dx_pairs.json
       - --input
-      - /artifacts/cases/case-001/H_matches.json
+      - /run/output/pipeline/cases/example-case/H_matches.json
       - --output
-      - /artifacts/cases/case-001/I_selected_rois.json
+      - /run/output/pipeline/cases/example-case/I_selected_rois.json
       - --config
-      - /configs/clee.json
+      - /app/components/person_e/configs/default.json

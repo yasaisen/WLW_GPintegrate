@@ -1,15 +1,10 @@
-name: interest_pattern_extraction
+name: person_c_interest_pattern
 owner: person_C
-version: 0.3.0
-inputs: [D.DxPairs@2.0]
+version: example-stub-0.1.0
+inputs: [CaseListInput@1.0]
 outputs: [E.ROIs@2.0]
 runtime:
   python: "3.12"
-  gpu: true
-  minimum_vram_gb: 8
-  cpu: 4
-  memory_gb: 16
-models:
-  - name: demo-interest-pattern-model
-    revision: mock-v1
+  gpu: false
 entrypoint: python -m components.person_c.interest_pattern
+status: example_stub_not_for_research_use

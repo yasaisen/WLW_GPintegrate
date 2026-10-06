@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from components.person_e.adapter import load_checkpoint_support, run_fixture_backend
+from components.person_e.clee import _merge_pseudo_dx_pair
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class CLEEAdapterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = json.loads(
-            (ROOT / "integration" / "configs" / "clee.json").read_text(
+            (ROOT / "components/person_e/configs/default.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -24,11 +25,39 @@ class CLEEAdapterTests(unittest.TestCase):
             ("Histologic_Type", "Microcalcification"),
             self.support.active_DxItem_list,
         )
-        self.assertEqual(("Histologic_Type",), self.support.effective_DxItem_list)
+        self.assertEqual(
+            ("Histologic_Type", "Microcalcification"),
+            self.support.effective_DxItem_list,
+        )
         self.assertTrue(
             self.support.supports("Histologic_Type", "Invasive Carcinoma(IC)")
         )
-        self.assertFalse(self.support.supports("Microcalcification", "Present"))
+        self.assertTrue(self.support.supports("Microcalcification", "Present"))
+
+    def test_multiple_dxitem_traces_merge_on_one_roi(self) -> None:
+        roi = {"roi_id": "roi-1"}
+        _merge_pseudo_dx_pair(
+            roi,
+            "Histologic_Type",
+            {
+                "0": {"Histologic_Type": {"assigned": "Invasive Carcinoma(IC)"}},
+                "finalResult": {
+                    "Histologic_Type": {"assigned": "Invasive Carcinoma(IC)"}
+                },
+            },
+        )
+        _merge_pseudo_dx_pair(
+            roi,
+            "Microcalcification",
+            {
+                "0": {"Microcalcification": {"assigned": "Present"}},
+                "finalResult": {"Microcalcification": {"assigned": "Present"}},
+            },
+        )
+        self.assertEqual(
+            {"Histologic_Type", "Microcalcification"},
+            set(roi["pseudo_DxPair"]["finalResult"]),
+        )
 
     def test_fixture_backend_preserves_all_rois_across_hierarchical_chunks(self) -> None:
         payload = {

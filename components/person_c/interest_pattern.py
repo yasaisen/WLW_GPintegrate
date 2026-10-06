@@ -1,75 +1,61 @@
+"""Contract-only example for the Person C ROI-generation boundary.
+
+No slide is opened and no ROI is inferred.  Every source stain is retained
+with an empty ROI list.
+"""
+
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Any
 
-from contracts.metadata import iter_stains, single_case
-from contracts.runtime import cli_parser, load_config, load_inputs, write_artifact
+from contracts.runtime import (
+    cli_parser,
+    load_case_list_input,
+    load_config,
+    write_artifact,
+)
+
+
+def _producer(config: dict[str, Any]) -> str:
+    producer = config.get("component_version")
+    if config.get("mode") != "example" or not isinstance(producer, str) or not producer:
+        raise ValueError("Person C example requires an example config with component_version")
+    return producer
+
+
+def build_example_artifact(
+    source: dict[str, Any], producer: str
+) -> dict[str, Any]:
+    case = deepcopy(source["case_list"][0])
+    case_id = case["case_id"]
+    for block in case["tissue_blocks"]:
+        for stain in block["stains"]:
+            stain["roi_num"] = 0
+            stain["roi_list"] = []
+    return {
+        "contract": "E.ROIs",
+        "schema_version": "2.0",
+        "artifact_id": f"E-example-{case_id}",
+        "case_id": case_id,
+        "producer": producer,
+        "payload": {
+            "data_mode": "inference",
+            "DxItem_list": list(source["DxItem_list"]),
+            "reference_versions": {
+                "example_stub": {"implemented": False, "purpose": "contract smoke test"}
+            },
+            "case_list": [case],
+        },
+    }
 
 
 def main() -> None:
-    args = cli_parser("丙: find E ROI references from the WSI path in D.DxPairs").parse_args()
-    dx_pairs = load_inputs(args.input, ["D.DxPairs"])["D.DxPairs"]
-    config = load_config(args.config)
-    case_id = dx_pairs["case_id"]
-    single_case(dx_pairs)
-    payload = deepcopy(dx_pairs["payload"])
-
-    global_idx = 0
-    for wsi_index, stain in enumerate(iter_stains(payload), start=1):
-        rois = []
-        for region_index, region in enumerate(config["demo_regions"], start=1):
-            xywh = [region["x"], region["y"], region["width"], region["height"]]
-            cxcywh = [
-                region["x"] + region["width"] / 2,
-                region["y"] + region["height"] / 2,
-                region["width"],
-                region["height"],
-            ]
-            info = {
-                "area": region["width"] * region["height"],
-                "coords_seg": None,
-                "cxcywh": cxcywh,
-                "mpp": [config["demo_mpp"]["x"], config["demo_mpp"]["y"]],
-                "roi_path": None,
-                "roi_wh": [region["width"], region["height"]],
-                "xywh": xywh,
-            }
-            rois.append(
-                {
-                    "roi_id": f"{case_id}-{stain['stain_id']}-roi-{region_index:03d}",
-                    "global_idx": global_idx,
-                    "local_idx": region_index - 1,
-                    "level0_info": deepcopy(info),
-                    "main_info": {**deepcopy(info), "mpp": config["demo_mpp"]["x"]},
-                    "DxPair": None,
-                    "visualAttrs": None,
-                    "visualAttrs_info": None,
-                    "selection_history": [
-                        {
-                            "stage": "interest_pattern_extraction",
-                            "owner": "person_C",
-                            "artifact_contract": "E.ROIs",
-                            "action": "candidate_generated",
-                            "status": "selected",
-                            "selected": True,
-                            "reason": "interest_pattern_candidate_generated",
-                            "producer": config["component_version"],
-                        }
-                    ],
-                }
-            )
-            global_idx += 1
-        stain["roi_list"] = rois
-        stain["roi_num"] = len(rois)
-
-    artifact = {
-        "contract": "E.ROIs",
-        "schema_version": "2.0",
-        "artifact_id": f"E-{case_id}",
-        "case_id": case_id,
-        "producer": config["component_version"],
-        "payload": payload,
-    }
+    args = cli_parser("Person C example: CaseList input to E.ROIs").parse_args()
+    if len(args.input) != 1:
+        raise ValueError("interest_pattern accepts exactly one CaseList input")
+    source = load_case_list_input(args.input[0], single_case=True)
+    artifact = build_example_artifact(source, _producer(load_config(args.config)))
     write_artifact(artifact, args.output, "E.ROIs")
 
 

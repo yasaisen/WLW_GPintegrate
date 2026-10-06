@@ -1,3 +1,1 @@
-# 丙的 demo 目前只使用 Python standard library，因此沒有第三方套件。
-# OpenSlide 等系統套件應寫在 Dockerfile；Python package 才寫在這裡並固定版本。
-
+# The example stub uses only the Python standard library.

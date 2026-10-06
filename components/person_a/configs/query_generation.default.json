@@ -1,8 +1,8 @@
 {
-  "component_version": "person-a/query-generation:0.7.0",
-  "histologic_mapping_path": "/references/Histologic_Type_mappingTable.json",
-  "candidate_reference_path": "/references/candidateReference.json",
-  "type_level_path": "/references/[typeLevel]visualAttrs_v1.2.1_2603241656.json",
+  "component_version": "person-a/query-generation:0.8.0",
+  "histologic_mapping_path": "../reference/person_a/template_ref/Histologic_Type_mappingTable.json",
+  "candidate_reference_path": "../reference/person_a/template_ref/candidateReference.json",
+  "type_level_path": "../reference/person_a/template_ref/[typeLevel]visualAttrs_v1.2.1_2603241656.json",
   "backend": {
     "mode": "reference"
   }

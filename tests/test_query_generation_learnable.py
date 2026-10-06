@@ -13,7 +13,11 @@ from components.person_a.learnable_query_generator import (
 )
 from components.person_a.query_generation import generate_artifact
 from contracts.metadata import dx_items
+from contracts.paths import REFERENCE_ROOT
 from contracts.runtime import validate_artifact
+
+
+PERSON_A_REFERENCE = REFERENCE_ROOT / "person_a/template_ref"
 
 
 class FakeLearnableGenerator:
@@ -215,7 +219,7 @@ def _write_references(root: Path) -> dict:
 
 class LearnableQueryGenerationTest(unittest.TestCase):
     def test_reference_backend_keeps_fixture_path_model_free(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=PERSON_A_REFERENCE) as temp_dir:
             config = {
                 "component_version": "person-a/query-generation:0.7.0",
                 **_write_references(Path(temp_dir)),
@@ -239,7 +243,7 @@ class LearnableQueryGenerationTest(unittest.TestCase):
         )
 
     def test_learnable_backend_produces_valid_g_and_uses_three_chunks(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=PERSON_A_REFERENCE) as temp_dir:
             config = {
                 "component_version": "person-a/query-generation:0.7.0",
                 **_write_references(Path(temp_dir)),
@@ -291,7 +295,7 @@ class LearnableQueryGenerationTest(unittest.TestCase):
         )
 
     def test_learnable_backend_fails_when_f_has_fewer_than_three_chunks(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=PERSON_A_REFERENCE) as temp_dir:
             config = {
                 "component_version": "person-a/query-generation:0.7.0",
                 **_write_references(Path(temp_dir)),

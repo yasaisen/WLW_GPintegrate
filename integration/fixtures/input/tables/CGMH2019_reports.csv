@@ -1,3 +1,0 @@
-case_id,report_id,report_text,wsi_id,stain_type,wsi_path,block_id,dx_item,dx_result,reference_wsi_ids
-case-003,report-003,Breast resection with invasive lobular carcinoma.,case-003-he,HE,/data/case-003-he.ndpi,B,Histologic_Type,Invasive lobular carcinoma,case-003-he
-case-003,report-003,Breast resection with invasive ductal carcinoma.,case-003-pr,PR,/data/case-003-pr.ndpi,B,,,

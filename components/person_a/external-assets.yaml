@@ -1,0 +1,47 @@
+schema_version: 1
+owner: person_a
+assets:
+  - name: diagnostic-candidates
+    revision: seven-class-histologic-type-2026-09
+    sha256: 4a22ec33327691098ed25835962f8fde92a4e96ac6864f554ac76f28a2285d3d
+    license: internal-research-use
+    expected_mount_path: /reference/person_a/template_ref/DxStructuredCandidates_integrated.json
+  - name: histologic-type-mapping
+    revision: 2026-03
+    sha256: 8d0318eb0f5d32744bbcd5a277a20aa1e5c48c28a3c24505ee8cbebef7f89b13
+    license: internal-research-use
+    expected_mount_path: /reference/person_a/template_ref/Histologic_Type_mappingTable.json
+  - name: visual-attribute-candidates
+    revision: 2026-03
+    sha256: 420c4916e9113debbb9adeb2aeda00a253461aec10cf8b2e29aef4ce772cb206
+    license: internal-research-use
+    expected_mount_path: /reference/person_a/template_ref/candidateReference.json
+  - name: type-level-visual-attributes
+    revision: 1.2.1-2603241656
+    sha256: a119c04d59d59f3cb7dbfe2d4d71407987032ce496460aa3588394f7dbee9bd3
+    license: internal-research-use
+    expected_mount_path: /reference/person_a/template_ref/[typeLevel]visualAttrs_v1.2.1_2603241656.json
+  - name: learnable-query-attribute-vocabulary
+    revision: nano5-stage2-2026-09
+    sha256: c0f9664419c00b2c2f750415920b3486e797610a9bc0b12edf7671a33fae5690
+    license: internal-research-use
+    expected_mount_path: /reference/person_a/template_ref/chunks_with_attribute.json
+  - name: learnable-query-soft-prompt
+    revision: stage1-64sp-50epoch-best
+    sha256: c9d1eede26b2958614f465323acc1caa60864f45d137810980f712e9b33f6c7a
+    license: internal-research-use
+    expected_mount_path: /reference/person_a/checkpoint/soft_prompt_best.pt
+  - name: medgemma-report-extractor
+    revision: 91850547d9f0b2fdd21aa7c5f4f3d1a8a52c243b
+    sha256: null
+    license: google-health-ai-developer-foundations
+    source: huggingface:google/medgemma-1.5-4b-it
+    expected_cache_path: /run/cache/huggingface
+    note: Multi-file Hub snapshot is pinned by revision; record a deployment export manifest when mirrored offline.
+  - name: gemma-query-generator
+    revision: resolve-before-release
+    sha256: null
+    license: gemma
+    source: huggingface:google/gemma-3-1b-it
+    expected_cache_path: /run/cache/huggingface
+    note: Pin the exact Hub revision and exported snapshot manifest before release acceptance.

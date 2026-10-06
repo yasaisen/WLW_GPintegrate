@@ -1,89 +1,273 @@
-# 丁的準備與交付清單
+# 丁（Person D）：Visual Attribute Filter 準備與交付
 
-## 你的責任邊界
+丁負責合併 `[E]` ROI 與 `[G]` query，產生 `[H]` matching artifact。目前 stub 不讀 WSI、不做
+visual attribute 推論，只建立合法 H shell；正式交付應替換內部方法但保留所有 ROI 與稽核事件。
 
-丁同時接收影像候選區與文字查詢，負責 visual attribute extraction 及 matching：
+## 1. Input／output 規格
+
+| Entrypoint | Input | Output |
+|---|---|---|
+| `components.person_d.visual_filter` | `[E] E.ROIs@2.0` + `[G] G.VisualAttributeQueries@2.0` | `[H] H.MatchedROIs@2.0` |
+
+- E/G/H 的 `case_id` 必須相同；不得依 `--input` 順序猜測 contract。
+- H 必須保留 E 的所有 ROI，不可只輸出 selected ROI。
+- 每個已處理 ROI 應保留上游 `selection_history`，再追加合法的
+  `visual_attributes_matching_filter` event。
+- query unmapped、非 reference WSI、推論失敗與條件不符的語意須分成 skipped／rejected，不得靜默丟棄。
+- 讀取 WSI 時使用 E 的 `stains[].filepath` 與 ROI geometry；不得建立另一套未記錄的 WSI root。
+
+Canonical schemas：
+
+- `contracts/schemas/E_rois.schema.json`
+- `contracts/schemas/G_visual_attribute_queries.schema.json`
+- `contracts/schemas/H_matched_rois.schema.json`
+- `contracts/schemas/metadata_case_payload.schema.json`
+
+## 2. 交換 JSON 結構示例
+
+以下是 E/G/H 的交換重點，`<...>` 表示為閱讀而省略的 canonical metadata。正式 fixture 必須包含
+schema 所有 required fields，不能把省略字串送入 runtime。
+
+### First input：`[E] E.ROIs@2.0`
+
+```json
+{
+  "contract": "E.ROIs",
+  "schema_version": "2.0",
+  "artifact_id": "E-case-001",
+  "case_id": "case-001",
+  "producer": "person-c/interest-pattern:<version>",
+  "payload": {
+    "data_mode": "inference",
+    "DxItem_list": ["Histologic_Type"],
+    "case_list": [
+      {
+        "case_id": "case-001",
+        "tissue_blocks": [
+          {
+            "block_id": "A",
+            "stains": [
+              {
+                "stain_id": "case-001-he",
+                "filepath": "/data/case-001-he.svs",
+                "roi_num": 1,
+                "roi_list": [
+                  {
+                    "roi_id": "roi-001",
+                    "level0_info": {"xywh": [128, 128, 256, 256], "<其餘 roiInfo>": "見 schema"},
+                    "main_info": {"mpp": 0.5, "roi_wh": [128, 128], "<其餘 roiInfo>": "見 schema"},
+                    "DxPair": null,
+                    "visualAttrs": null,
+                    "visualAttrs_info": null,
+                    "selection_history": ["<person C event>"]
+                  }
+                ],
+                "<其餘 stain fields>": "見 metadata schema"
+              }
+            ],
+            "memo": ""
+          }
+        ],
+        "<其餘 ROI case fields>": "見 metadata schema"
+      }
+    ]
+  }
+}
+```
+
+### Second input：`[G] G.VisualAttributeQueries@2.0`
+
+```json
+{
+  "contract": "G.VisualAttributeQueries",
+  "schema_version": "2.0",
+  "artifact_id": "G-case-001",
+  "case_id": "case-001",
+  "producer": "person-a/query-generation:<version>",
+  "payload": {
+    "data_mode": "inference",
+    "DxItem_list": ["Histologic_Type"],
+    "case_list": [
+      {
+        "case_id": "case-001",
+        "structured_report": {
+          "DxItems": {
+            "Histologic_Type": {
+              "dx_pair_id": "case-001-dx-001",
+              "referenceWSI": ["case-001-he"],
+              "visualAttrQueries": [
+                {
+                  "query_id": "query-001",
+                  "dx_pair_id": "case-001-dx-001",
+                  "text": "<visual attribute question>",
+                  "criteria_status": "mapped",
+                  "diagnosticCriteria": {"<criteria fields>": "見 metadata schema"},
+                  "mapping_source": "<reference version>",
+                  "chunk_ids": ["chunk-001"]
+                }
+              ],
+              "<其餘 DxItem fields>": "沿用 D"
+            }
+          },
+          "<其餘 structured report fields>": "沿用 D"
+        },
+        "<其餘 metadata-shaped case fields>": "沿用 D"
+      }
+    ]
+  }
+}
+```
+
+### Output：`[H] H.MatchedROIs@2.0`
+
+```json
+{
+  "contract": "H.MatchedROIs",
+  "schema_version": "2.0",
+  "artifact_id": "H-case-001",
+  "case_id": "case-001",
+  "producer": "person-d/visual-filter:<version>",
+  "payload": {
+    "data_mode": "inference",
+    "DxItem_list": ["Histologic_Type"],
+    "reference_versions": {"visual_backend": {"version": "<model/prompt revision>"}},
+    "case_list": [
+      {
+        "case_id": "case-001",
+        "structured_report": {"<same DxItems and queries as G>": "..."},
+        "tissue_blocks": [
+          {
+            "block_id": "A",
+            "stains": [
+              {
+                "stain_id": "case-001-he",
+                "roi_num": 1,
+                "roi_list": [
+                  {
+                    "roi_id": "roi-001",
+                    "level0_info": {"<same geometry as E>": "..."},
+                    "main_info": {"<same geometry as E>": "..."},
+                    "DxPair": null,
+                    "visualAttrs": {"<observed attributes>": "<value>"},
+                    "visualAttrs_info": {"backend": "<revision>"},
+                    "selection_history": [
+                      "<unchanged person C event>",
+                      {
+                        "stage": "visual_attributes_matching_filter",
+                        "owner": "person_D",
+                        "artifact_contract": "H.MatchedROIs",
+                        "action": "legality_evaluated",
+                        "status": "selected",
+                        "selected": true,
+                        "reason": "visual_attributes_match",
+                        "producer": "person-d/visual-filter:<version>",
+                        "query_id": "query-001",
+                        "dx_pair_id": "case-001-dx-001",
+                        "criteria_status": "mapped"
+                      }
+                    ],
+                    "<其餘 ROI fields>": "沿用 E"
+                  }
+                ],
+                "<其餘 stain fields>": "沿用 E"
+              }
+            ],
+            "memo": ""
+          }
+        ],
+        "<其餘 case fields>": "合併 E metadata 與 G structured_report"
+      }
+    ]
+  }
+}
+```
+
+丁不得重編 `roi_id`；以 `case_id + stain_id + roi_id + dx_pair_id + query_id` 建立可稽核 linkage。
+
+## 3. 打包準備
 
 ```text
-E.ROIs ──> visual attribute extraction ──┐
-                                         ├─> matching/filter ──> H.MatchedROIs
-G.VisualAttributeQueries ────────────────┘
+WLW_GPintegrate/components/person_d/       # 程式、環境與非敏感 config
+reference/person_d/checkpoint/             # vision／multimodal checkpoint
+reference/person_d/template_ref/           # prompt、visual vocabulary、label metadata
+run/input/                                 # E、G 或 pipeline case artifacts
+run/output/pipeline/cases/<case_id>/        # H artifact
+run/cache/person_d/                         # 可刪除 feature/cache
 ```
 
-目前 demo 把 extraction 與 matching 寫在同一個 executable。正式版可以在內部分 class/function，
-也可以拆成兩個 container；只要對外仍明確接受 E/G 並產生 H 即可。
+- 模型 architecture、ROI reader 與 matching code 放 component；權重、prompt metadata 放 reference。
+- target MPP、window/stride、batch size、threshold、query text 選擇與 device 只放 config。
+- 不將 checkpoint、WSI、prompt 私有資料或 feature cache COPY 進 image。
+- 資產 manifest 應記錄 model/prompt revision、SHA-256、license 與相容 schema/version。
 
-## 需要準備的東西與放置位置
+## 4. Unified CLI
 
-| 要準備的項目 | 放置位置 | 說明 |
-|---|---|---|
-| Extraction/matching 實作 | `components/person_d/visual_filter.py` | 讀 E、G，寫 H；不得依靠丙/甲的 Python object |
-| Python dependencies | `components/person_d/requirements.txt` | torch、vision、model client 等直接依賴與版本 |
-| OS/CUDA dependencies | `components/person_d/Dockerfile` | CUDA base、image codec、OpenSlide 等 |
-| 預設 config | `components/person_d/configs/default.json` | legality threshold、batch size、model path/revision；H 不做 top-k |
-| Runtime/model manifest | `components/person_d/component.yaml` | GPU/VRAM、CPU/RAM、timeout、checkpoint hash |
-| E input example | `integration/artifacts-local/cases/case-001/E_rois.json` | 由丙產生，需確認座標語意 |
-| G input example | `integration/artifacts-local/cases/case-001/G_queries.json` | 由甲產生，需確認 attribute vocabulary |
-| H expected output | `integration/artifacts-local/cases/case-001/H_matches.json` | 保留完整 metadata case，填入 visualAttrs 與丁階段 selection events |
-| E/G/H schemas | `contracts/schemas/` | 任何欄位變更先經 producer/consumer review |
-| Model checkpoint | host `/models/person-d/<model>/<revision>/` | 唯讀 mount，不放 image |
-| WSI | host `/data/wsi/...` | 依 E 的 `image_uri` 讀取，不在 E/H 搬 pixels |
-
-## 兩條對接線要分別驗證
-
-### 與丙對接 E
-
-- 確認 `level0_info`/`main_info` 的 xywh 與 mpp 語意。
-- 確認 container 內能解析 stain 的 `filepath`。
-- 確認 WSI mount 為 read-only。
-- 準備至少一張已知 ROI 的小型 fixture，驗證裁出的 pixels 一致。
-
-### 與甲對接 G
-
-- G 的 `candidateReference` 是 controlled vocabulary，`diagnosticCriteria.visualAttrs` 是條件。
-- `Must_True`/`Must_False` 先做合法性篩選，再以 High/Low conditions 計分。
-- `criteria_status=unmapped` 不得自行猜條件，應留下 `status=skipped` 與原因。
-- score 範圍為 0～1、越大越匹配；每個決策寫入 ROI `selection_history[]`。
-- 每張 reference WSI ROI 獨立判定；所有通過 threshold 的 ROI 都是 selected，不排名、不取 top-k。
-
-## H.MatchedROIs 的 provenance
-
-每個 ROI 的丁階段 selection event 至少要能回答：
-
-1. 它回應哪個 `dx_pair_id`？
-2. 它回應哪個 `query_id`？
-3. 使用哪個 `roi_id` 與其所屬 stain？
-4. WSI 的 `filepath` 與 ROI 座標為何？
-5. 哪些 attributes 實際 match？
-6. 分數是多少，模型/元件版本是什麼？
-
-目前 producer version 放在 artifact header。正式研究若要比較多個模型，建議在 manifest/config
-記錄 checkpoint hash，必要時擴充 H schema 加上可重現的 model provenance。
-
-## 空結果與錯誤要分開
-
-「沒有 ROI 達 threshold」是合法科學結果：H 仍保留所有 E ROI，已評估者標為
-`status=rejected`；unmapped/outside-reference 標為 `status=skipped`。兩者都保留 reason，且
-`selected=false`。「WSI 打不開」或「模型載入失敗」則是執行錯誤，應 non-zero exit。
-
-## 交付前自己跑
+容器介面：
 
 ```bash
-python3 pipeline/run_pipeline.py
-
-python3 -m components.person_d.visual_filter \
-  --input integration/artifacts-local/cases/case-001/E_rois.json \
-  --input integration/artifacts-local/cases/case-001/G_queries.json \
-  --output /tmp/H_matches.json \
-  --config components/person_d/configs/default.json
-
-python3 -m unittest discover -s tests -v
+component \
+  --input /input/E_rois.json \
+  --input /input/G_queries.json \
+  --output /output/H_matches.json \
+  --config /config/visual_filter.yaml
 ```
 
-## 完成定義
+目前 Python／JSON config 形式：
 
-- canonical E 與 G 能獨立通過 input validation，H 通過 output validation。
-- H 的每筆結果能 trace 到 D/G/E/WSI，不依賴 array index。
-- 空 match 是合法 artifact；讀檔/模型錯誤是 non-zero exit。
-- CPU/GPU、batch size、VRAM、timeout 與 checkpoint revision 有記錄。
-- image 不包含 WSI、病人資料、credential 或大型 checkpoint。
+```bash
+python -m components.person_d.visual_filter \
+  --input ../run/output/work/E_rois.json \
+  --input ../run/output/work/G_queries.json \
+  --output ../run/output/work/H_matches.json \
+  --config components/person_d/configs/example.json
+```
+
+case 不一致、ROI geometry 不合法、WSI/reference/checkpoint 缺失、CUDA 或推論錯誤時必須 non-zero exit，
+且不得寫出部分 H。
+
+## 5. Dockerfile／requirements.txt
+
+目前 stub 使用 Python 3.12、CPU 與 standard library。正式版本必須固定 WSI reader、影像 framework、
+模型 framework、模型程式 revision 與 CUDA runtime，並由 clean machine 建置：
+
+```bash
+docker build --no-cache \
+  -f components/person_d/Dockerfile \
+  -t wlw/person-d:<version> .
+```
+
+若 dependency 來自 Git，必須固定 commit。README 記錄目標 GPU、最低 VRAM、CPU fallback、RAM、batch
+size 與 timeout；在 canonical example 上實際測量，而不是只抄開發機規格。
+
+## 6. Canonical example
+
+至少交付：
+
+```text
+components/person_d/examples/
+├── E_rois.valid.json
+├── G_queries.valid.json
+├── synthetic_slide.<supported-format>
+├── H_matches.expected.json
+├── config.example.json
+└── README.md
+```
+
+範例需覆蓋 selected、rejected、skipped、unmapped query、非 reference WSI 與空 ROI case；所有輸出 ROI
+數量和 ID 必須與 E 一致。使用合成 slide，不提交 PHI。模型非決定性時定義 score 容許誤差與最終狀態
+判定方式。
+
+## 7. README 必填資訊
+
+列出 component version、E/G/H schema version、模型與 prompt/vocabulary revision、Python/framework、
+WSI library、CUDA、GPU 數量、最低 VRAM、CPU fallback、checkpoint/template logical path 與 SHA-256、
+matching 規則、CLI、Docker build/run、canonical example、效能、限制與錯誤語意。
+
+## 8. 提交檢查
+
+- [ ] H 通過 schema，所有 E ROI 均保留且 selection history 可稽核。
+- [ ] E/G case identity、query/ROI/referenceWSI linkage 有測試。
+- [ ] clean-machine image 可跑 canonical example，model/prompt 版本可驗證。
+- [ ] source、configs、examples、tests、Dockerfile、requirements、README、PREPARATION 已提交。
+- [ ] checkpoint/template 只放 `reference/person_d/`；WSI、features、cache、run artifacts 不提交。
+- [ ] 根目錄 contract、丙→丁 integration 與完整 pipeline tests 全部通過。

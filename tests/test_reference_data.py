@@ -9,14 +9,15 @@ from components.person_a.reference_data import (
     load_histologic_mapping,
     load_visual_references,
 )
+from contracts.paths import REFERENCE_ROOT
 
 
-ROOT = Path(__file__).resolve().parents[2]
+PERSON_A_REFERENCE = REFERENCE_ROOT / "person_a/template_ref"
 
 
 class ReferenceDataTests(unittest.TestCase):
     def test_mapping_is_loaded_from_the_configured_file_at_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=PERSON_A_REFERENCE) as temp_dir:
             path = Path(temp_dir) / "mapping.json"
             path.write_text(
                 json.dumps({"Histologic_Type_mappingTable": {"Custom": "Target"}}),
@@ -27,8 +28,10 @@ class ReferenceDataTests(unittest.TestCase):
             self.assertEqual("mapping.json", provenance["source_name"])
 
     def test_type_level_filename_revision_and_polarity_are_canonicalized(self) -> None:
-        candidate_path = ROOT.parent / "lab_19" / "reference" / "candidateReference.json"
-        type_level_path = ROOT / "[typeLevel]visualAttrs_v1.2.1_2603241656.json"
+        candidate_path = PERSON_A_REFERENCE / "candidateReference.json"
+        type_level_path = (
+            PERSON_A_REFERENCE / "[typeLevel]visualAttrs_v1.2.1_2603241656.json"
+        )
         _, type_levels, _ = load_visual_references(candidate_path, type_level_path)
         self.assertTrue(type_levels)
         self.assertTrue(all(item["version"] == "1.2.1" for item in type_levels))

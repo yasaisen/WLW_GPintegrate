@@ -1,3 +1,6 @@
-# 戊的 demo 目前只使用 Python standard library，因此沒有第三方套件。
-# 接入真實 CLEE/DRGVLM 實作時，請把直接依賴固定版本。
-
+accelerate==1.13.0
+numpy==2.2.6
+openslide-python==1.4.6
+Pillow==12.0.0
+torch==2.6.0
+transformers==5.6.2

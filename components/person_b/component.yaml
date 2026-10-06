@@ -1,15 +1,12 @@
-name: knowledge_retrieval
+name: person_b_literature_and_retrieval
 owner: person_B
-version: 0.3.0
+version: example-stub-0.1.0
 inputs: [A.Literature@2.0, D.DxPairs@2.0]
 outputs: [A.Literature@2.0, F.Chunks@2.0]
-source_inputs: [cleanSections_metaList_2603201640.json]
 runtime:
   python: "3.12"
   gpu: false
-  cpu: 1
-  memory_gb: 1
-models: []
 entrypoints:
   - python -m components.person_b.prepare_literature
   - python -m components.person_b.knowledge_retrieval
+status: example_stub_not_for_research_use

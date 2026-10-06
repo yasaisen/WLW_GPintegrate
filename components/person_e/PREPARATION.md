@@ -1,109 +1,319 @@
-# 戊的準備與交付清單
+# 戊（Person E）：CLEE Evidence Selection 準備與交付
 
-## 你的責任邊界
+戊負責接收 `[D]` 與 `[H]`，產生最終 `[I]`。元件必須保留 H 的全部 ROI，為每個診斷 pair 追加
+可稽核的 CLEE decision；沒有 eligible ROI 是合法成功結果，不應強制載入模型。
 
-戊負責將文字診斷 pair 與配對後的影像 evidence 送入 CLEE，產生整體核心框架的最終 ROI：
+## 1. Input／output 規格
 
-```text
-D.DxPairs ─────────────┐
-                        ├─> CLEE ──> I.CLEESelectedROIs  （核心最終產物）
-H.MatchedROIs ─────────┘                  │
-                                         └─> DRGVLM 等 evaluation consumers
-```
-
-DRGVLM 不是戊的 CLEE component，也不是核心 DAG 的最後一步。它只是拿 I 做實驗的方法之一；
-未來換成其他 VLM、人工閱片或統計分析時，核心 A、B、D～I pipeline 不應因此改動。
-
-## 需要準備的東西與放置位置
-
-| 要準備的項目 | 放置位置 | 說明 |
+| Entrypoint | Input | Output |
 |---|---|---|
-| WLW orchestration | `components/person_e/clee.py` | 讀 D/H、做 eligibility/support join、合併 inference output、寫 I |
-| Backend adapter | `components/person_e/adapter.py` | checkpoint support preflight、fixture/external backend、layered trace |
-| Python dependencies | `components/person_e/requirements.txt` | 只放 CLEE 的直接依賴；DRGVLM 有自己的 evaluation environment |
-| OS/CUDA dependencies | `components/person_e/Dockerfile` | 若需要 GPU/CUDA，需改 base image 並記錄相容性 |
-| 預設 config | `components/person_e/configs/default.json` | backend、checkpoint/bundle paths、WLW whitelist、forward chunk limit |
-| External config 範例 | `components/person_e/configs/external.example.json` | 純推論 CLI command template 與 path placeholders |
-| Runtime/model manifest | `components/person_e/component.yaml` | Python、CPU/RAM/GPU、timeout、entrypoint |
-| D input example | `integration/artifacts-local/cases/case-001/D_dx_pairs.json` | 由甲產生 |
-| H input example | `integration/artifacts-local/cases/case-001/H_matches.json` | 由丁產生；完整保留 ROI 並標記 matching 結果 |
-| 最終 expected output | `integration/artifacts-local/cases/case-001/I_selected_rois.json` | 完整 metadata case 與 CLEE selection events |
-| D/H/I schemas | `contracts/schemas/` | I 是核心最終 contract |
-| Model checkpoint | host `/models/person-e/<model>/<revision>/` | 唯讀 mount；不放 image |
-| DRGVLM 程式與環境 | `evaluation/drgvlm/` | 與 person_e image/environment 分離 |
-| Evaluation output | 建議 `/runs/<run_id>/evaluation/drgvlm/` | 不覆寫 I 或中間 D/H artifact |
+| `components.person_e.clee` | `[D] D.DxPairs@2.0` + `[H] H.MatchedROIs@2.0` | `[I] I.CLEESelectedROIs@2.0` |
 
-## D 與 H 如何對齊
+- D/H/I 的 `case_id` 與 `structured_report.DxItems` 必須一致。
+- 只有 H 中對相同 `dx_pair_id` 標為 selected，且 stain 屬於該診斷 pair `referenceWSI` 的 ROI 可送入模型。
+- I 保留全部 H ROI 與既有 selection history，再追加 `clee` event。
+- 執行模型的 ROI 必須含完整 `pseudo_DxPair`；未執行模型者不得偽造 prediction。
+- `selected`、`rejected`、`skipped` 與 reason/action 必須符合中央 selection semantics。
+- DRGVLM 是 I 的下游 consumer，不屬於本元件，也不得回寫或覆蓋 I。
 
-只能使用 stable ID join：
+Canonical schemas：
 
-```text
-D.structured_report.DxItems.*.dx_pair_id == H ROI event.dx_pair_id
-D.structured_report.DxItems.*.referenceWSI contains ROI 所屬 stain_id
+- `contracts/schemas/D_dx_pairs.schema.json`
+- `contracts/schemas/H_matched_rois.schema.json`
+- `contracts/schemas/I_clee_selected_rois.schema.json`
+- `contracts/schemas/metadata_case_payload.schema.json`
+
+## 2. 交換 JSON 結構示例
+
+以下 `<...>` 是文件省略標記，正式 D/H/I fixture 必須補齊 canonical metadata fields。戊以
+`case_id + dx_pair_id + stain_id + roi_id` 串接，不得依陣列順序配對。
+
+### First input：`[D] D.DxPairs@2.0`
+
+```json
+{
+  "contract": "D.DxPairs",
+  "schema_version": "2.0",
+  "artifact_id": "D-case-001",
+  "case_id": "case-001",
+  "producer": "person-a/report-decompose:<version>",
+  "payload": {
+    "data_mode": "inference",
+    "DxItem_list": ["Histologic_Type"],
+    "case_list": [
+      {
+        "case_id": "case-001",
+        "structured_report": {
+          "DxItems": {
+            "Histologic_Type": {
+              "dx_pair_id": "case-001-dx-001",
+              "DxResultCls": "<case result>",
+              "referenceWSI": ["case-001-he"],
+              "<其餘 DxItem fields>": "見 metadata schema"
+            }
+          }
+        },
+        "<其餘 metadata-shaped case fields>": "見 metadata schema"
+      }
+    ]
+  }
+}
 ```
 
-不可假設 array index 能表達對應關係。H 可能：
+### Second input：`[H] H.MatchedROIs@2.0`
 
-- 同一個 diagnosis 對應多個 ROI。
-- 某個 diagnosis 沒有 ROI。
-- matching 排序因模型版本改變。
-
-I 保留 H 的完整 metadata shell，並在每個 ROI 的 `selection_history[]` 追加 CLEE 的
-action/status/reason/score/query/dx linkage。只有真正送進模型的 ROI 才加入原樣 layered
-`pseudo_DxPair`，讓 consumer 能重建同一 ROI 並一路追回 D/H/CLEE。
-
-## 已確定的推論語意
-
-- 目前 WLW policy 只允許 `Histologic_Type`，再與 checkpoint active label space 取交集。
-- H 未通過的 ROI 不送 model；I 記錄 `status=skipped`、
-  `reason=upstream_visual_filter_rejected`。
-- H 全部未通過時不 fallback；不呼叫 backend，selected ROI 合法地為 0。
-- CLEE `finalResult.assigned_as_ref=true/false` 分別映射成 I 的 selected/rejected。
-- `assigned` 是七類 ROI pseudo result；不得與 evidence selection 混成同一欄位。
-- 所有高於 validation-calibrated case-importance threshold 的 ROI 都 selected，不取 top-k。
-- classification thresholds、case-importance threshold、active space、epoch 與 bundle ID 都記入 trace/provenance。
-- `max_roi_dxitem_inputs_per_forward` 是 hierarchical chunk 上限，不是 ROI sampling limit。
-
-`backend.mode=fixture` 只供本 repo 的 contract/E2E 測試。正式 CLEE 使用
-`backend.mode=external_command`，由 `command_template` 的
-`{input_metadata}`、`{output_metadata}`、`{checkpoint_dir}`、`{image_root}` 與
-`{max_roi_dxitem_inputs_per_forward}` placeholders 接入純推論 CLI。CLI 必須保留 `roi_id`，並為每個
-submitted ROI 寫入含 `finalResult` 的 `pseudo_DxPair`。
-
-## I 與下游 DRGVLM 的邊界
-
-I 對每個 ROI 的最低必要內容是：
-
-```text
-case_id + dx_pair_id + roi_id + stain.filepath + level0_info + selection_history
-evaluated ROI additionally requires pseudo_DxPair
+```json
+{
+  "contract": "H.MatchedROIs",
+  "schema_version": "2.0",
+  "artifact_id": "H-case-001",
+  "case_id": "case-001",
+  "producer": "person-d/visual-filter:<version>",
+  "payload": {
+    "data_mode": "inference",
+    "DxItem_list": ["Histologic_Type"],
+    "case_list": [
+      {
+        "case_id": "case-001",
+        "structured_report": {"<same DxItems as D>": "..."},
+        "tissue_blocks": [
+          {
+            "block_id": "A",
+            "stains": [
+              {
+                "stain_id": "case-001-he",
+                "roi_num": 1,
+                "roi_list": [
+                  {
+                    "roi_id": "roi-001",
+                    "level0_info": {"<ROI geometry>": "..."},
+                    "main_info": {"roi_path": null, "<其餘 ROI geometry>": "..."},
+                    "selection_history": [
+                      "<person C event>",
+                      {
+                        "stage": "visual_attributes_matching_filter",
+                        "owner": "person_D",
+                        "artifact_contract": "H.MatchedROIs",
+                        "action": "legality_evaluated",
+                        "status": "selected",
+                        "selected": true,
+                        "reason": "visual_attributes_match",
+                        "producer": "person-d/visual-filter:<version>",
+                        "dx_pair_id": "case-001-dx-001",
+                        "query_id": "query-001"
+                      }
+                    ],
+                    "<其餘 ROI fields>": "見 metadata schema"
+                  }
+                ],
+                "<其餘 stain fields>": "見 metadata schema"
+              }
+            ],
+            "memo": ""
+          }
+        ],
+        "<其餘 case fields>": "見 metadata schema"
+      }
+    ]
+  }
+}
 ```
 
-由 DRGVLM 按座標讀取 pixels。若 CLEE 已產生 dynamic-MPP PNG，可在 I 提供 `roi_image_uri` 作
-cache；仍應保留 WSI reference/level-0 coordinate 作 authoritative provenance。DRGVLM 自己的 prompt、
-model weight、config 與 metrics 放 `evaluation/drgvlm/` 及 `/runs/<run_id>/evaluation/`，不要混入 I。
+### Output：`[I] I.CLEESelectedROIs@2.0`
 
-## 交付前自己跑
+```json
+{
+  "contract": "I.CLEESelectedROIs",
+  "schema_version": "2.0",
+  "artifact_id": "I-case-001",
+  "case_id": "case-001",
+  "producer": "person-e/clee:1.0.0",
+  "payload": {
+    "data_mode": "inference",
+    "DxItem_list": ["Histologic_Type"],
+    "reference_versions": {
+      "clee_inference": {
+        "backend": "native",
+        "<checkpoint/threshold provenance>": "見 canonical output"
+      }
+    },
+    "case_list": [
+      {
+        "case_id": "case-001",
+        "structured_report": {"<same DxItems as D/H>": "..."},
+        "tissue_blocks": [
+          {
+            "block_id": "A",
+            "stains": [
+              {
+                "stain_id": "case-001-he",
+                "roi_num": 1,
+                "roi_list": [
+                  {
+                    "roi_id": "roi-001",
+                    "pseudo_DxPair": {
+                      "0": {
+                        "Histologic_Type": {
+                          "chunk_idx": 0,
+                          "assigned": "<class>",
+                          "importance": 0.82,
+                          "assigned_as_ref": true,
+                          "candidate@top3AUC": {"<class>": 0.8},
+                          "candidate@ALL": {"<class>": 0.8}
+                        }
+                      },
+                      "finalResult": {
+                        "Histologic_Type": {
+                          "chunk_idx": 0,
+                          "assigned": "<class>",
+                          "importance": 0.82,
+                          "assigned_as_ref": true,
+                          "candidate@top3AUC": {"<class>": 0.8},
+                          "candidate@ALL": {"<class>": 0.8}
+                        }
+                      }
+                    },
+                    "selection_history": [
+                      "<unchanged person C event>",
+                      "<unchanged person D event>",
+                      {
+                        "stage": "clee",
+                        "owner": "person_E",
+                        "artifact_contract": "I.CLEESelectedROIs",
+                        "action": "evidence_evaluated",
+                        "status": "selected",
+                        "selected": true,
+                        "reason": "case_importance_threshold_met",
+                        "producer": "person-e/clee:1.0.0",
+                        "backend": "native",
+                        "dx_pair_id": "case-001-dx-001",
+                        "threshold": 0.7,
+                        "comparison": ">=",
+                        "score": 0.82
+                      }
+                    ],
+                    "<其餘 ROI geometry/visual fields>": "完整沿用 H"
+                  }
+                ],
+                "<其餘 stain fields>": "完整沿用 H"
+              }
+            ],
+            "memo": ""
+          }
+        ],
+        "<其餘 case fields>": "完整沿用 H"
+      }
+    ]
+  }
+}
+```
+
+若 H 沒有 eligible ROI，I 仍保留 ROI，但 CLEE event 使用 `action=inference_skipped`、
+`status=skipped`，且不得加入 `pseudo_DxPair`。
+
+## 3. 打包準備
+
+```text
+WLW_GPintegrate/components/person_e/       # CLEE adapter、native backend、環境與 configs
+reference/person_e/checkpoint/             # MedGemma、embedding、CLEE prefix/checkpoint、threshold bundle
+reference/person_e/template_ref/           # fixture label space 與測試 threshold
+run/output/pipeline/cases/<case_id>/        # D、H、I
+run/output/materialized/person_e/           # 選配 ROI materialization
+run/cache/person_e/                         # external-command/native 暫存
+```
+
+- `configs/default.json` 是 deterministic fixture，只供 contract／pipeline 測試。
+- `configs/native.json` 是 native inference 設定；部署前由 `native.example.json` 複製並填入可驗證路徑。
+- checkpoint active label space 是 authority；deployment whitelist 只能縮小，不能擴張 checkpoint 支援範圍。
+- 模型、embedding、checkpoint、threshold 本體不進 Git 或 image；在 `external-assets.yaml` 記錄 revision、
+  SHA-256、license 與 mount path。
+- D/H/I、ROI crop、backend 暫存與 log 一律位於 sibling `run/`。
+
+## 4. Unified CLI
+
+容器介面：
 
 ```bash
-python3 pipeline/run_pipeline.py
-
-python3 -m components.person_e.clee \
-  --input integration/artifacts-local/cases/case-001/D_dx_pairs.json \
-  --input integration/artifacts-local/cases/case-001/H_matches.json \
-  --output /tmp/I_selected_rois.json \
-  --config components/person_e/configs/default.json
-
-python3 -m unittest discover -s tests -v
+component \
+  --input /input/D_dx_pairs.json \
+  --input /input/H_matches.json \
+  --output /output/I_selected_rois.json \
+  --config /config/clee.yaml
 ```
 
-## 完成定義
+專案 fixture 命令：
 
-- canonical D/H 能執行，最終 I 通過 schema。
-- join 只靠 stable IDs，不靠 array index 或檔名順序。
-- H 空 matches 不觸發 CLEE forward；全部 ROI 保留 H 事實與 CLEE skipped reason。
-- checkpoint config 與 threshold bundle active spaces 必須一致；有效支援再受 WLW whitelist 限制。
-- evaluated ROI 有完整 `pseudo_DxPair`；skipped ROI 不偽造 model output。
-- 每個 selected ROI 能 trace 到 D、G、H、E 與原 WSI。
-- DRGVLM 不被 import 進 CLEE；它只透過 I contract 消費結果。
-- image 不包含資料、credential 或大型 checkpoint。
+```bash
+python -m components.person_e.clee \
+  --input ../run/output/pipeline/cases/case-001/D_dx_pairs.json \
+  --input ../run/output/pipeline/cases/case-001/H_matches.json \
+  --output ../run/output/work/I_selected_rois.json \
+  --config components/person_e/configs/default.json
+```
+
+正式 native inference 將 config 改為 `components/person_e/configs/native.json`。D/H case 不一致、資產缺失、
+checkpoint/threshold epoch 不相容、CUDA 不可用、backend coverage 不完整或輸出違反 schema 時必須
+non-zero exit，不得寫出部分 I。
+
+## 5. Dockerfile／requirements.txt
+
+目前 component manifest 的正式需求為：
+
+- Component version：`1.0.0`
+- Python：`3.10`
+- CUDA runtime：`11.8`
+- GPU：必要，至少 1 張
+- 最低 VRAM：16 GB
+- 建議 CPU：4 cores；RAM：32 GB；timeout：3600 秒
+- 主要模型：`medgemma-1.5-4b-it`
+- CLEE checkpoint：由 `configs/native.json:checkpoint_dir` 指定
+
+以上是目前 manifest 的交付基線；若實測不同，必須同步修改 manifest 與 README，不可只改 config。
+
+```bash
+docker build --no-cache \
+  -f components/person_e/Dockerfile \
+  -t wlw/person-e:1.0.0 .
+```
+
+clean-machine 測試需包含 fixture CPU path 與 native GPU path。Docker build 不得下載私有模型或 checkpoint；
+執行時以唯讀 `/reference` mount 提供。
+
+## 6. Canonical examples
+
+至少交付兩組：
+
+```text
+components/person_e/examples/
+├── fixture/
+│   ├── D_dx_pairs.valid.json
+│   ├── H_matches.valid.json
+│   ├── I_selected_rois.expected.json
+│   ├── config.example.json
+│   └── README.md
+└── native-smoke/
+    ├── D_dx_pairs.valid.json
+    ├── H_matches.valid.json
+    ├── expected_structure.json
+    └── README.md
+```
+
+fixture expected output 必須 byte-stable。native smoke 可因硬體數值誤差只驗證 schema、ROI coverage、event
+semantics 與 score 容許誤差，但需記錄 GPU/CUDA/framework。範例至少覆蓋 selected、rejected、
+upstream skipped、空 eligible set 與多 DxItem 合併。
+
+## 7. README 必填資訊
+
+列出 component/version、D/H/I schema、MedGemma 與 CLEE checkpoint revision、embedding／threshold bundle、
+Python/PyTorch/Transformers/CUDA、GPU 數量、最低 VRAM、CPU fixture 支援、資產 logical path 與 SHA-256、
+label-space/threshold authority、chunk 行為、CLI、Docker build/run、canonical example、錯誤條件與限制。
+
+## 8. 提交檢查
+
+- [ ] I 通過 schema 與 selection semantics，H ROI 全數保留。
+- [ ] fixture、空 eligible、multi-DxItem、native GPU smoke 與錯誤路徑皆通過。
+- [ ] checkpoint epoch、threshold bundle、label space 與 component version 可相互驗證。
+- [ ] clean-machine image 可跑 fixture 與掛載 reference 後的 native smoke。
+- [ ] source、configs、examples、tests、Dockerfile、requirements、README、PREPARATION 已提交。
+- [ ] 模型與 checkpoint 只放 `reference/person_e/`；run artifacts、cache、crop 與 credential 不提交。
+- [ ] 根目錄 contract 與完整 pipeline tests 全部通過。

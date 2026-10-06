@@ -1,4 +1,0 @@
-case_id,report_id,report_text,wsi_id,stain_type,wsi_path,block_id,dx_item,dx_result,reference_wsi_ids
-case-001,report-001,Breast biopsy with invasive carcinoma.,case-001-he,HE,/data/case-001-he.svs,A,Histologic_Type,Invasive breast carcinoma of no special type,
-case-001,report-001,Breast biopsy with invasive carcinoma.,case-001-er,ER,/data/case-001-er.svs,A,,,
-case-002,report-002,Breast tissue is unremarkable.,case-002-he,HE,/data/case-002-he.svs,,Histologic_Type,Unremarkable,

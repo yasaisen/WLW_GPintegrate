@@ -109,6 +109,31 @@ def _learnable_generator(backend_config: dict[str, Any]) -> Any:
     return LearnableSoftPromptGenerator(backend_config)
 
 
+def build_example_artifact(
+    d_artifact: dict[str, Any],
+    f_artifact: dict[str, Any],
+    producer: str,
+) -> dict[str, Any]:
+    """Emit deterministic empty queries for the public contract smoke test."""
+
+    case_id = ensure_same_case(d_artifact, f_artifact)
+    payload = deepcopy(d_artifact["payload"])
+    for record in payload["case_list"][0]["structured_report"]["DxItems"].values():
+        record["visualAttrQueries"] = []
+    payload.setdefault("reference_versions", {})["example_query_stub"] = {
+        "implemented": False,
+        "purpose": "contract smoke test",
+    }
+    return {
+        "contract": "G.VisualAttributeQueries",
+        "schema_version": "2.0",
+        "artifact_id": f"G-example-{case_id}",
+        "case_id": case_id,
+        "producer": producer,
+        "payload": payload,
+    }
+
+
 def generate_artifact(
     dx_artifact: dict[str, Any],
     chunks_artifact: dict[str, Any],
@@ -234,11 +259,18 @@ def main() -> None:
     args = cli_parser("甲: generate G visual attribute queries from F chunks").parse_args()
     inputs = load_inputs(args.input, ["D.DxPairs", "F.Chunks"])
     config = load_config(args.config)
-    artifact = generate_artifact(
-        inputs["D.DxPairs"],
-        inputs["F.Chunks"],
-        config,
-    )
+    if config.get("mode") == "example":
+        artifact = build_example_artifact(
+            inputs["D.DxPairs"],
+            inputs["F.Chunks"],
+            config["component_version"],
+        )
+    else:
+        artifact = generate_artifact(
+            inputs["D.DxPairs"],
+            inputs["F.Chunks"],
+            config,
+        )
     write_artifact(artifact, args.output, "G.VisualAttributeQueries")
 
 

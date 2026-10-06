@@ -11,6 +11,7 @@ from components.person_e.adapter import (
     run_backend,
 )
 from contracts.metadata import ensure_same_case, iter_rois, single_case
+from contracts.paths import sibling_logical_path
 from contracts.runtime import cli_parser, load_config, load_inputs, write_artifact
 
 
@@ -77,10 +78,7 @@ def _clee_event(
         "backend": config["backend"]["mode"],
         "checkpoint_epoch": support.checkpoint_epoch,
         "bundle_id": support.bundle_id,
-        "support_source": str(
-            config.get("checkpoint_config_path")
-            or support.config_path
-        ),
+        "support_source": sibling_logical_path(support.config_path),
     }
     if dx_pair_id is not None:
         event["dx_pair_id"] = dx_pair_id
@@ -112,6 +110,32 @@ def _inference_payload(
             for roi in stain["roi_list"]:
                 roi.pop("pseudo_DxPair", None)
     return payload
+
+
+def _merge_pseudo_dx_pair(
+    roi: dict[str, Any], DxItem: str, trace: Mapping[str, Any]
+) -> None:
+    """Merge one DxItem trace without discarding earlier CLEE predictions."""
+
+    target = roi.setdefault("pseudo_DxPair", {})
+    if not isinstance(target, dict):
+        raise ValueError(f"ROI {roi.get('roi_id')} has an invalid pseudo_DxPair")
+    for layer_key, raw_predictions in trace.items():
+        if not isinstance(raw_predictions, Mapping) or DxItem not in raw_predictions:
+            raise ValueError(
+                f"CLEE trace for ROI {roi.get('roi_id')}/{DxItem} has an invalid "
+                f"layer {layer_key!r}"
+            )
+        layer = target.setdefault(str(layer_key), {})
+        if not isinstance(layer, dict):
+            raise ValueError(
+                f"ROI {roi.get('roi_id')} pseudo_DxPair layer {layer_key!r} is invalid"
+            )
+        if DxItem in layer:
+            raise ValueError(
+                f"ROI {roi.get('roi_id')} already contains a {DxItem} CLEE prediction"
+            )
+        layer[DxItem] = deepcopy(raw_predictions[DxItem])
 
 
 def _prediction_event(
@@ -241,7 +265,10 @@ def main() -> None:
         ]
         eligible_roi_ids: set[str] = set()
         selected_query_ids_by_roi: dict[str, list[str]] = {}
-        for _, roi in roi_entries:
+        reference_stains = {str(value) for value in d_record.get("referenceWSI", [])}
+        for stain, roi in roi_entries:
+            if reference_stains and str(stain["stain_id"]) not in reference_stains:
+                continue
             selected_events = [
                 event
                 for event in _matching_events(roi, dx_pair_id)
@@ -341,9 +368,7 @@ def main() -> None:
                 continue
 
             trace = backend_result.predictions_by_roi_id[roi_id]
-            if "pseudo_DxPair" in roi:
-                raise ValueError(f"ROI {roi_id} already contains pseudo_DxPair")
-            roi["pseudo_DxPair"] = deepcopy(trace)
+            _merge_pseudo_dx_pair(roi, DxItem, trace)
             roi["selection_history"].append(
                 _prediction_event(
                     config=config,
@@ -364,15 +389,23 @@ def main() -> None:
     payload.setdefault("reference_versions", {})["clee_inference"] = {
         "backend": config["backend"]["mode"],
         "execution_statuses": sorted(set(backend_statuses)) or ["not_invoked"],
-        "checkpoint_config_path": str(
-            config.get("checkpoint_config_path") or support.config_path
-        ),
-        "threshold_bundle_path": str(
-            config.get("threshold_bundle_path") or support.threshold_bundle_path
+        "checkpoint_config_path": sibling_logical_path(support.config_path),
+        "threshold_bundle_path": sibling_logical_path(
+            support.threshold_bundle_path
         ),
         "checkpoint_epoch": support.checkpoint_epoch,
         "bundle_id": support.bundle_id,
-        "wlw_supported_dx_items": list(config["wlw_supported_dx_items"]),
+        "support_policy": (
+            "checkpoint_active_label_space"
+            if config.get("wlw_supported_dx_items") is None
+            else "configured_intersection"
+        ),
+        "configured_wlw_supported_dx_items": (
+            None
+            if config.get("wlw_supported_dx_items") is None
+            else list(config["wlw_supported_dx_items"])
+        ),
+        "wlw_supported_dx_items": list(support.effective_DxItem_list),
         "checkpoint_active_dx_items": list(support.active_DxItem_list),
         "effective_dx_items": list(support.effective_DxItem_list),
         "active_dx_result_dict": {

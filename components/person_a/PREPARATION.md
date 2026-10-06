@@ -1,111 +1,286 @@
-# 甲的準備與交付清單
+# 甲（Person A）：Report Decompose／Query Generation 準備與交付
 
-## 你的責任邊界
+甲負責兩個獨立 executable。目前目錄內只有 contract stub；交付正式版本時應替換內部邏輯，但保留
+module 名稱、Unified CLI、單案行為與 schema version。共通規則見專案根目錄 `README.md`。
 
-甲負責兩個 executable，但可以共用同一個 Python/Docker environment：
+## 1. Input／output 規格
+
+| Entrypoint | Input | Output |
+|---|---|---|
+| `components.person_a.report_decompose` | `CaseListInput@1.0`，且每次只含一個 case | `[D] D.DxPairs@2.0` |
+| `components.person_a.query_generation` | `[D] D.DxPairs@2.0` + `[F] F.Chunks@2.0` | `[G] G.VisualAttributeQueries@2.0` |
+
+要求：
+
+- D 必須保留 CaseList 的 case/block/stain 身分與 `stains[].filepath`，並產生 schema 合法的
+  `structured_report.DxItems`。
+- G 必須保留 D 的診斷結構，將 query 寫入各 DxItem 的 `visualAttrQueries`。
+- D/F/G 的 `case_id` 必須一致；不得依 `--input` 出現順序判斷 contract。
+- `[B] B.ReportTables` 是上游 ingestion manifest；目前甲的 runtime 邊界從已正規化 CaseList 開始。
+  若要改回直接讀表格，必須先調整中央 contract 與 pipeline，不可私下擴充 CLI。
+- 不得自行建立 `[C]` artifact；目前沒有 canonical `[C]` schema。
+
+Canonical schemas：
+
+- `contracts/schemas/case_list_input.schema.json`
+- `contracts/schemas/D_dx_pairs.schema.json`
+- `contracts/schemas/F_chunks.schema.json`
+- `contracts/schemas/G_visual_attribute_queries.schema.json`
+
+## 2. 交換 JSON 結構示例
+
+以下片段用來說明元件之間的交換層級；`<...>` 是文件省略標記，不是可直接送入 runtime 的值。
+正式 canonical example 必須補齊 schema 的所有 required fields，且不得保留省略標記。
+
+### Report Decompose input：`CaseListInput@1.0`
+
+```json
+{
+  "DxItem_list": ["Histologic_Type"],
+  "case_list": [
+    {
+      "sample_idx": 0,
+      "case_id": "case-001",
+      "hospital": "EXAMPLE",
+      "patient_info": {},
+      "date": "",
+      "source": {"fixture": "synthetic"},
+      "organ": "Breast",
+      "report_raw_content": "<synthetic report text>",
+      "tissue_blocks": [
+        {
+          "block_id": "A",
+          "stains": [
+            {
+              "stain_id": "case-001-he",
+              "stain_type": "HE",
+              "filename": "case-001-he.svs",
+              "filepath": "/data/case-001-he.svs",
+              "memo": ""
+            }
+          ],
+          "memo": ""
+        }
+      ],
+      "memo": ""
+    }
+  ]
+}
+```
+
+### Report Decompose output：`[D] D.DxPairs@2.0`
+
+```json
+{
+  "contract": "D.DxPairs",
+  "schema_version": "2.0",
+  "artifact_id": "D-case-001",
+  "case_id": "case-001",
+  "producer": "person-a/report-decompose:<version>",
+  "payload": {
+    "data_mode": "inference",
+    "DxItem_list": ["Histologic_Type"],
+    "reference_versions": {},
+    "case_list": [
+      {
+        "case_id": "case-001",
+        "report_raw_content": "<same source report>",
+        "structured_report": {
+          "reportType": "<type or null>",
+          "reportSubTypes": [],
+          "DxItems": {
+            "Histologic_Type": {
+              "dx_pair_id": "case-001-dx-001",
+              "source_report_id": "case-001-report",
+              "DxResultCls": "<result class>",
+              "DxResultTxt": "<normalized result text>",
+              "DxResultRawTxt": "<source evidence or null>",
+              "referenceBlock": ["A"],
+              "referenceType": ["HE"],
+              "referenceWSI": ["case-001-he"],
+              "appear_reportTypes": ["<report type>"],
+              "optionTypes": "categorical",
+              "has_numericalData": false
+            }
+          }
+        },
+        "tissue_blocks": ["<metadata-shaped block/stain；roi_list initially empty>"],
+        "<其餘 case metadata>": "見 metadata_case_payload.schema.json"
+      }
+    ]
+  }
+}
+```
+
+### Query Generation second input：`[F] F.Chunks@2.0`
+
+```json
+{
+  "contract": "F.Chunks",
+  "schema_version": "2.0",
+  "artifact_id": "F-case-001",
+  "case_id": "case-001",
+  "producer": "person-b/knowledge-retrieval:<version>",
+  "payload": {
+    "corpus_id": "corpus-v1",
+    "knowledge_base": {"<manifest fields>": "見 F_chunks.schema.json"},
+    "chunks": [
+      {
+        "chunk_id": "chunk-001",
+        "dx_pair_id": "case-001-dx-001",
+        "literature_id": "lit-001",
+        "section_id": "sec-001",
+        "text": "<retrieved evidence>",
+        "retrieval_rank": 1,
+        "relevance_score": 0.9,
+        "<其餘 provenance/score fields>": "見 F_chunks.schema.json"
+      }
+    ]
+  }
+}
+```
+
+### Query Generation output：`[G] G.VisualAttributeQueries@2.0`
+
+```json
+{
+  "contract": "G.VisualAttributeQueries",
+  "schema_version": "2.0",
+  "artifact_id": "G-case-001",
+  "case_id": "case-001",
+  "producer": "person-a/query-generation:<version>",
+  "payload": {
+    "data_mode": "inference",
+    "DxItem_list": ["Histologic_Type"],
+    "case_list": [
+      {
+        "case_id": "case-001",
+        "structured_report": {
+          "DxItems": {
+            "Histologic_Type": {
+              "dx_pair_id": "case-001-dx-001",
+              "visualAttrQueries": [
+                {
+                  "query_id": "query-001",
+                  "dx_pair_id": "case-001-dx-001",
+                  "text": "<visual attribute question>",
+                  "criteria_status": "mapped",
+                  "diagnosticCriteria": {"<criteria fields>": "見 metadata schema"},
+                  "mapping_source": "<reference version>",
+                  "chunk_ids": ["chunk-001"]
+                }
+              ],
+              "<其餘 DxItem fields>": "沿用 D"
+            }
+          },
+          "<其餘 structured report/case fields>": "沿用 D"
+        }
+      }
+    ]
+  }
+}
+```
+
+交換時以 `case_id`、`dx_pair_id`、`chunk_id` 與 `query_id` 串接，不能依陣列位置配對。
+
+## 3. 打包準備
 
 ```text
-B.ReportTables ──> report_decompose ─┬─> D.DxPairsIndex
-                                      └─> per-case D.DxPairs (metadata-shaped case)
-D.DxPairs + F.Chunks ──> query_generation ──> G.VisualAttributeQueries
+WLW_GPintegrate/components/person_a/       # 程式、Dockerfile、requirements、文件、非敏感 config
+reference/person_a/checkpoint/             # 模型或權重；若沒有模型則可不建立
+reference/person_a/template_ref/           # 診斷候選、mapping、vocabulary 等外部參考
+run/input/                                 # CaseList、D、F
+run/output/                                # D、G、暫存與測試產物
 ```
 
-你只需要保證：任何符合 B v1.0 的輸入都能產生合法 D index 與 per-case D v2.0；D v2.0 與
-F v2.0 能產生 G v2.0。integration layer 不應 import 你的內部 class。
+- 執行環境只由 `Dockerfile` 與 `requirements.txt` 宣告。
+- 超參數、feature flag 與 logical path 放在 `configs/`，不得散落於 Python 常數。
+- 模型、reference table、院端資料與 credential 不得進 Git 或 image。
+- 外部資產須在 `external-assets.yaml` 列出名稱、revision、SHA-256、授權與預期 mount path。
+- runtime 只寫入 sibling `run/`；不得在 component 或 `reference/` 下產生 cache。
 
-## 需要準備的東西與放置位置
+## 4. Unified CLI
 
-| 要準備的項目 | 放置位置 | 說明 |
-|---|---|---|
-| Report Decompose 實作 | `components/person_a/report_decompose.py` | 保留 `--input/--output/--config` CLI；一次處理多 table/case |
-| Hospital table parsers | `components/person_a/table_parsers.py` | 依 `table_type` 解析 VGHTC/CGMH，統一為 reports + WSIs |
-| XLSX reader | `components/person_a/xlsx_reader.py` | 只讀取工作表欄位/值，不複製原始 Excel |
-| Query Generation 實作 | `components/person_a/query_generation.py` | 讀 D/F、寫 G，不直接讀乙的程式或資料庫內部物件 |
-| Python dependencies | `components/person_a/requirements.txt` | 一行一個直接依賴，正式版本應 pin，例如 `transformers==x.y.z` |
-| 兩個預設 config | `components/person_a/configs/*.default.json` | 放可公開、可重現的預設參數；不要放密碼或機器絕對路徑 |
-| Runtime 描述 | `components/person_a/component.yaml` | 填 Python、CPU、RAM、GPU/VRAM、entrypoints、版本 |
-| Container recipe | `components/person_a/Dockerfile` | 安裝 OS/Python 環境；不要把 dataset/checkpoint 複製進 image |
-| B/F canonical input | `integration/fixtures/` 或由上游 artifact 產生 | B 已有 fixture；F 由乙在 smoke test 產生 |
-| D/G expected output | `integration/artifacts-local/` | 跑 pipeline 後生成，可用來人工檢查欄位 |
-| D/G schema | `contracts/schemas/D_*.json`、`G_*.json` | canonical source，由整合負責人審核版本變更 |
-| Contract/E2E tests | `tests/` | 至少驗 valid input、valid output、缺欄位時 fail |
-
-## 資料 contract 要確認的細節
-
-### B.ReportTables
-
-B 是 run-level 來源 manifest，payload 的 `tables[]` 只放 `table_idx/table_type/table_path`；
-它不屬於單一 case，所以 envelope 不放 `case_id`。
-
-`table_path` 指向 raw-data directory 時，VGHTC parser 會 join 病理報告 Excel、WSI 總表與
-`data_path`；CGMH parser 會 join 病理報告 Excel、影像路徑 CSV、染色總表與 `data_path`。
-WSI filename 可能含 `15.33.07` 這類掃描時間，實作只能移除已知 WSI 副檔名，不可直接用一般
-suffix 規則誤刪時間尾段。Windows-style source paths 也必須先正規化成 container 可用的 separator。
-
-### D.DxPairs
-
-每個 per-case D 使用 `payload.case_list[0]`。報告原文在 `report_raw_content`，DxPair 在
-`structured_report.DxItems`，WSI 在 `tissue_blocks[].stains[]`，其中 `filepath` 就是 report table
-帶入的 `wsi_path`。合法 DxItem 及其預設欄位每次執行都由
-`DxStructuredCandidates_integrated.json` 載入。
-
-DxItem 的 `referenceWSI[]` 指定對應 WSI；來源有明示 ID 時以明示內容為準，否則依 catalog 的
-`referenceType` 選染色（例如 HE），連 `referenceType` 都沒有時才預設全部 WSI。raw hospital
-report 沒有結構化結果時可合法輸出空 `DxItems`，正式報告分解/NLP 接在甲的 extraction boundary。
-
-每個 pair 必須有穩定 ID，不可只靠 list index：
-
-- `dx_pair_id`
-- `source_report_id`
-- `DxResultCls` / `DxResultTxt` / `DxResultRawTxt`
-- `referenceBlock` / `referenceType` / `referenceWSI`
-
-D 同時會被乙、丙與戊使用。若你更名或刪除欄位，三個 consumer 都會受影響，因此不能只在自己的
-程式裡偷偷修改；應先修改中央 schema、升版並更新 fixtures。
-
-### G.VisualAttributeQueries
-
-每個 Histologic Type query 放在相應 DxItem 的 `visualAttrQueries[]`，必須能追回原始診斷：
-
-- `query_id`
-- `dx_pair_id`
-- `text`
-- `criteria_status`：`mapped` 或 `unmapped`
-- `diagnosticCriteria`：一個 type-level subtype；unmapped 時為 `null`
-- `mapping_source` / `chunk_ids`
-
-mapping 必須在 runtime 讀取 `Histologic_Type_mappingTable.json`，不可寫死在程式中。
-`candidateReference.json` 是 visual attribute vocabulary，type-level 檔提供條件。
-
-不要把自訂 Python object、tensor 或 tokenizer output 直接放入 G；G 必須是語言無關且能寫成
-JSON 的交換資料。
-
-## 模型與機密怎麼放
-
-- 小型公開設定：放 `configs/`。
-- 大型 checkpoint：建議 host 放 `/models/person-a/<model>/<revision>/`，以唯讀 volume mount。
-- Hugging Face token/API key：用 runtime environment variable 或 secret manager，不寫入 Git、config
-  或 Dockerfile。
-- 報告原文與病人資料：放受控的 `/data` mount，不放 fixture；fixture 必須是去識別化假資料。
-
-config 只記錄 checkpoint 的邏輯名稱、revision 或 hash，不應寫死某位成員 home directory。
-
-## 交付前自己跑
+容器介面：
 
 ```bash
-python3 -m components.person_a.report_decompose \
-  --input integration/fixtures/input/B_report_tables.json \
-  --output /tmp/D_dx_pairs_index.json \
-  --config components/person_a/configs/report_decompose.default.json
+component \
+  --input /input/case.json \
+  --output /output/D_dx_pairs.json \
+  --config /config/report_decompose.yaml
 
-python3 pipeline/run_pipeline.py
-python3 -m unittest discover -s tests -v
+component \
+  --input /input/D_dx_pairs.json \
+  --input /input/F_chunks.json \
+  --output /output/G_queries.json \
+  --config /config/query_generation.yaml
 ```
 
-## 完成定義
+目前專案的 Python／JSON config 等價命令：
 
-- 乾淨環境可由 Dockerfile build。
-- 兩個 entrypoint 都不需人工改 code/config path 才能執行。
-- B→D index/per-case D 與 D+F→G 都通過 schema validation。
-- 錯誤輸入會以 non-zero exit code 失敗，而不是產生半套 JSON。
-- README/manifest 記錄真實 Python、CUDA、模型 revision 與資源需求。
+```bash
+python -m components.person_a.report_decompose \
+  --input ../run/input/pipeline/case-001.json \
+  --output ../run/output/work/D_dx_pairs.json \
+  --config components/person_a/configs/example.json
+
+python -m components.person_a.query_generation \
+  --input ../run/output/work/D_dx_pairs.json \
+  --input ../run/output/work/F_chunks.json \
+  --output ../run/output/work/G_queries.json \
+  --config components/person_a/configs/example.json
+```
+
+錯誤 input、未知 schema version、case 不一致、reference 缺失或模型錯誤必須非零結束，且不可寫出
+部分 D/G。
+
+## 5. Dockerfile／requirements.txt
+
+目前 stub 使用 Python 3.12、CPU 與 standard library。正式交付必須更新 `component.yaml`、Dockerfile、
+requirements 與 README，使其共同描述實際 Python、NLP/LLM framework、CPU/GPU 與 RAM/VRAM 需求。
+
+```bash
+docker build --no-cache \
+  -f components/person_a/Dockerfile \
+  -t wlw/person-a:<version> .
+```
+
+在 clean machine 執行 D 與 G 兩個 entrypoint；不得因工作站已安裝套件或存在未宣告的 reference file
+而成功。若使用 GPU，必須另驗證 CUDA image、driver、framework 與最低 VRAM。
+
+## 6. Canonical examples
+
+至少交付兩組：
+
+```text
+components/person_a/examples/
+├── report_decompose/
+│   ├── case_list.valid.json
+│   ├── D_dx_pairs.expected.json
+│   ├── config.example.json
+│   └── README.md
+└── query_generation/
+    ├── D_dx_pairs.valid.json
+    ├── F_chunks.valid.json
+    ├── G_queries.expected.json
+    ├── config.example.json
+    └── README.md
+```
+
+範例不得包含 PHI、院端原始報告或私有 mapping；使用合成內容並確保 expected output 可重現且通過
+canonical schema。另至少加入一個 invalid input，驗證元件會 non-zero fail。
+
+## 7. README 必填資訊
+
+甲的 `README.md` 必須列出 component version、D/G contract version、報告／query 模型名稱與 revision、
+Python/framework 版本、GPU/VRAM 或 CPU/RAM、checkpoint/reference logical path 與 SHA-256、完整 CLI、
+Docker build/run、canonical example、限制與已知失敗條件。若完全不使用模型，需明確寫「無模型」。
+
+## 8. 提交檢查
+
+- [ ] D、G 皆通過 schema，且 D/F/G case identity 一致。
+- [ ] `component.yaml`、image tag、artifact `producer` 與 README version 一致。
+- [ ] clean-machine build/run 成功，沒有隱含 Conda 或本機路徑依賴。
+- [ ] source、configs、examples、tests、Dockerfile、requirements、README、PREPARATION 已提交。
+- [ ] 外部資產只放 `reference/person_a/`，並附 manifest；`run/` 產物不提交。
+- [ ] 根目錄 contract 與 pipeline tests 全部通過。

@@ -4,7 +4,7 @@ FROM ${PERSON_A_RUNTIME_BASE}
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
-    HF_HOME=/models/huggingface \
+    HF_HOME=/run/cache/huggingface \
     TOKENIZERS_PARALLELISM=false \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
@@ -29,9 +29,7 @@ RUN python -m pip install --no-cache-dir --disable-pip-version-check \
 
 COPY contracts /app/contracts
 COPY components/person_a /app/components/person_a
-# This B manifest contains only parser types and container paths, not patient data.
-COPY integration/fixtures/input/B_report_tables.production.json /app/inputs/B_report_tables.production.json
 RUN touch /app/components/__init__.py \
-    && mkdir -p /models/huggingface
+    && mkdir -p /run/cache/huggingface
 
 ENTRYPOINT ["python", "-m", "components.person_a.report_decompose"]

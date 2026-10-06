@@ -133,6 +133,18 @@
         "roi_list": {"type": "array", "items": {"$ref": "#/$defs/roi"}}
       }
     },
+    "sourceStain": {
+      "type": "object",
+      "required": ["stain_id", "stain_type", "filename", "filepath", "memo"],
+      "additionalProperties": false,
+      "properties": {
+        "stain_id": {"type": "string", "minLength": 1},
+        "stain_type": {"type": "string", "minLength": 1},
+        "filename": {"type": "string", "minLength": 1},
+        "filepath": {"type": "string", "minLength": 1},
+        "memo": {"type": "string"}
+      }
+    },
     "block": {
       "type": "object",
       "required": ["block_id", "stains", "memo"],
@@ -140,6 +152,20 @@
       "properties": {
         "block_id": {"type": "string"},
         "stains": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/stain"}},
+        "memo": {"type": "string"}
+      }
+    },
+    "sourceBlock": {
+      "type": "object",
+      "required": ["block_id", "stains", "memo"],
+      "additionalProperties": false,
+      "properties": {
+        "block_id": {"type": "string"},
+        "stains": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/sourceStain"}
+        },
         "memo": {"type": "string"}
       }
     },
@@ -193,6 +219,7 @@
         "DxResultCls": {"type": ["string", "array"]},
         "DxResultTxt": {"type": "string"},
         "DxResultRawTxt": {"$ref": "#/$defs/nullableString"},
+        "raw_DxResultCls": {"$ref": "#/$defs/nullableString"},
         "referenceBlock": {"type": ["array", "null"], "items": {"type": "string"}},
         "referenceType": {"$ref": "#/$defs/stringList"},
         "referenceWSI": {"$ref": "#/$defs/stringList"},
@@ -233,6 +260,54 @@
         "memo": {"type": "string"}
       }
     },
+    "sourceCase": {
+      "type": "object",
+      "required": [
+        "sample_idx", "case_id", "hospital", "patient_info", "date", "source", "organ",
+        "report_raw_content", "tissue_blocks", "memo"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sample_idx": {"type": "integer", "minimum": 0},
+        "case_id": {"type": "string", "minLength": 1},
+        "hospital": {"type": "string", "minLength": 1},
+        "patient_info": {"type": "object"},
+        "date": {"type": "string"},
+        "source": {"type": "object"},
+        "organ": {"type": "string", "minLength": 1},
+        "report_raw_content": {"type": "string", "minLength": 1},
+        "tissue_blocks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/sourceBlock"}
+        },
+        "memo": {"type": "string"}
+      }
+    },
+    "roiCase": {
+      "type": "object",
+      "required": [
+        "sample_idx", "case_id", "hospital", "patient_info", "date", "source", "organ",
+        "report_raw_content", "tissue_blocks", "memo"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sample_idx": {"type": "integer", "minimum": 0},
+        "case_id": {"type": "string", "minLength": 1},
+        "hospital": {"type": "string", "minLength": 1},
+        "patient_info": {"type": "object"},
+        "date": {"type": "string"},
+        "source": {"type": "object"},
+        "organ": {"type": "string", "minLength": 1},
+        "report_raw_content": {"type": "string"},
+        "tissue_blocks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/block"}
+        },
+        "memo": {"type": "string"}
+      }
+    },
     "metadataPayload": {
       "type": "object",
       "required": ["data_mode", "DxItem_list", "case_list"],
@@ -247,6 +322,22 @@
           "minItems": 1,
           "maxItems": 1,
           "items": {"$ref": "#/$defs/case"}
+        }
+      }
+    },
+    "roiPayload": {
+      "type": "object",
+      "required": ["data_mode", "DxItem_list", "case_list"],
+      "additionalProperties": false,
+      "properties": {
+        "data_mode": {"type": "string", "enum": ["inference", "ground_truth", "evaluation"]},
+        "DxItem_list": {"$ref": "#/$defs/stringList"},
+        "reference_versions": {"type": "object"},
+        "case_list": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {"$ref": "#/$defs/roiCase"}
         }
       }
     }

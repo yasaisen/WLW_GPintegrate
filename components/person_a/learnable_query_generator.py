@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from contracts.paths import resolve_person_reference_path
 
 SOFT_PROMPT_MARKER = "<SOFT_PROMPT_INSERT>"
 
@@ -210,8 +211,12 @@ class LearnableSoftPromptGenerator:
         self.config = deepcopy(config)
         self.model_name = str(config["model_name"])
         self.model_revision = config.get("model_revision") or None
-        self.checkpoint_path = Path(config["checkpoint_path"])
-        self.attribute_reference_path = Path(config["attribute_reference_path"])
+        self.checkpoint_path = resolve_person_reference_path(
+            "person_a", config["checkpoint_path"]
+        )
+        self.attribute_reference_path = resolve_person_reference_path(
+            "person_a", config["attribute_reference_path"]
+        )
         self.required_chunk_count = int(config.get("required_chunk_count", 3))
         self.max_input_len = int(config.get("max_input_len", 8192))
         self.max_new_tokens = int(config.get("max_new_tokens", 768))

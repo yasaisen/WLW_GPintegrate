@@ -1,9 +1,0 @@
-{
-  "component_version": "person-c/interest-pattern:0.3.0",
-  "magnification": 20,
-  "demo_mpp": {"x": 0.5, "y": 0.5},
-  "demo_regions": [
-    {"x": 12800, "y": 9400, "width": 1024, "height": 1024, "level": 0},
-    {"x": 32000, "y": 18400, "width": 1024, "height": 1024, "level": 0}
-  ]
-}

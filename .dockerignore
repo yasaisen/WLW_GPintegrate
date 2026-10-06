@@ -3,4 +3,4 @@ __pycache__/
 .git/
 integration/artifacts/
 integration/artifacts-local/
-
+.env

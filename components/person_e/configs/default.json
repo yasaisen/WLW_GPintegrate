@@ -1,12 +1,12 @@
 {
-  "component_version": "person-e/clee-adapter:0.4.0",
+  "component_version": "person-e/clee:1.0.0",
   "backend": {
     "mode": "fixture",
     "fixture_importance_score_cycle": [0.82, 0.55]
   },
-  "wlw_supported_dx_items": ["Histologic_Type"],
-  "checkpoint_config_path": "components/person_e/configs/demo_checkpoint/config.json",
-  "threshold_bundle_path": "components/person_e/configs/demo_checkpoint/threshold_bundle.json",
+  "wlw_supported_dx_items": null,
+  "checkpoint_config_path": "../reference/person_e/template_ref/fixture_label_space.json",
+  "threshold_bundle_path": "../reference/person_e/template_ref/fixture_thresholds.json",
   "checkpoint_dir": null,
   "image_root": null,
   "max_roi_dxitem_inputs_per_forward": 500

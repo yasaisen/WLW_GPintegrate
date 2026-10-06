@@ -1,5 +1,5 @@
 __pycache__/
 *.py[cod]
-integration/artifacts/*.json
+integration/artifacts/
 integration/artifacts-local/
-
+.env

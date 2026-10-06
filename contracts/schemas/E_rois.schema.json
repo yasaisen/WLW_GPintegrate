@@ -10,6 +10,6 @@
     "artifact_id": {"type": "string", "minLength": 1},
     "case_id": {"type": "string", "minLength": 1},
     "producer": {"type": "string", "minLength": 1},
-    "payload": {"$ref": "metadata_case_payload.schema.json#/$defs/metadataPayload"}
+    "payload": {"$ref": "metadata_case_payload.schema.json#/$defs/roiPayload"}
   }
 }

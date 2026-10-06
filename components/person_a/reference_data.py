@@ -8,32 +8,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-
-ROOT = Path(__file__).resolve().parents[2]
-CONTAINER_REFERENCE_ROOT = Path("/references")
-
+from contracts.paths import resolve_person_reference_path, sibling_logical_path
 
 def resolve_reference(configured_path: str | Path) -> Path:
-    """Resolve a host path, then fall back to visible project/container locations.
+    """Resolve an external Person A asset and enforce reference/person_a/."""
 
-    Using the basename fallbacks keeps the mapping dynamically editable at the
-    lab_20 root while allowing Compose to mount the same file under /references.
-    """
-
-    configured = Path(configured_path)
-    basename = configured.name
-    candidates = [
-        configured,
-        ROOT / configured,
-        ROOT.parent / basename,
-        ROOT / "references" / basename,
-        CONTAINER_REFERENCE_ROOT / basename,
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate.resolve()
-    searched = ", ".join(str(candidate) for candidate in candidates)
-    raise FileNotFoundError(f"Reference file {configured_path!r} was not found; searched: {searched}")
+    path = resolve_person_reference_path("person_a", configured_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Person A reference file was not found: {path}")
+    return path
 
 
 def load_reference(configured_path: str | Path) -> tuple[Any, dict[str, str]]:
@@ -41,7 +24,7 @@ def load_reference(configured_path: str | Path) -> tuple[Any, dict[str, str]]:
     raw = path.read_bytes()
     return json.loads(raw.decode("utf-8")), {
         "source_name": path.name,
-        "source_path": str(path),
+        "source_path": sibling_logical_path(path),
         "sha256": hashlib.sha256(raw).hexdigest(),
     }
 

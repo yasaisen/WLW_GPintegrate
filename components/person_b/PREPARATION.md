@@ -1,113 +1,271 @@
-# 乙的準備與交付清單
+# 乙（Person B）：Literature Preparation／Knowledge Retrieval 準備與交付
 
-## 你的責任邊界
+乙負責建立 `[A]` 文獻 artifact，以及依 `[D]` 產生 `[F]` retrieval chunks。目前僅有合成文獻與
+空 retrieval result 的 contract stub；正式方法不得沿用 stub 結果作為研究輸出。
 
-乙負責文獻知識庫與 retrieval：
+## 1. Input／output 規格
 
-```text
-cleanSections meta list ──> prepare_literature ──> A.Literature v2
-                                                       │
-D.DxPairs ─────────────────────────────────────────────┴─> retrieval ──> F.Chunks v2
-```
-
-目前 demo 為了簡單，`knowledge_retrieval.py` 每次直接從 A 建立小型 in-memory knowledge base。
-正式資料量變大時，建議把「建庫」與「查詢」拆成兩個 executable，但 F 的 contract 不必因此改變。
-
-## 需要準備的東西與放置位置
-
-| 要準備的項目 | 放置位置 | 說明 |
+| Entrypoint | Input | Output |
 |---|---|---|
-| Literature preparation | `components/person_b/prepare_literature.py` | 唯讀轉換 cleanSections，加入 A envelope、stable IDs 與 source digest |
-| Retrieval 實作 | `components/person_b/knowledge_retrieval.py` | 讀 A、D，寫 F；正式版也可改讀外部 versioned index |
-| 建庫程式（正式版） | 建議 `components/person_b/build_knowledge_base.py` | A→index；必須有獨立 CLI、版本與 build log |
-| Python dependencies | `components/person_b/requirements.txt` | 放 embedding、retrieval 或 DB client 的 pinned Python packages |
-| 預設 config | `components/person_b/configs/default.json` | top-k、index 名稱、retrieval 參數；不要放 credential |
-| Runtime 描述 | `components/person_b/component.yaml` | 記錄 Python、CPU/RAM、是否需要 GPU、index/model revision |
-| Container recipe | `components/person_b/Dockerfile` | 安裝 client/library；不要把整個文獻庫 COPY 進 image |
-| A canonical input | `integration/fixtures/input/A_literature.json` | 小型、固定、可提交的假資料 |
-| D canonical input | pipeline 產生的 `integration/artifacts-local/cases/case-001/D_dx_pairs.json` | 用來驗證你接受甲的 per-case D |
-| F expected output | `integration/artifacts-local/cases/case-001/F_chunks.json` | 每段 chunk 要保留 literature 與 dx provenance |
-| A/F schemas | `contracts/schemas/A_*.json`、`F_*.json` | contract 變更先走中央審核與版本化 |
+| `components.person_b.prepare_literature` | 外部文獻來源，由 config／reference 管理 | `[A] A.Literature@2.0` |
+| `components.person_b.knowledge_retrieval` | `[A] A.Literature@2.0` + `[D] D.DxPairs@2.0` | `[F] F.Chunks@2.0` |
 
-## A.Literature 的文字骨架
+- A 只承載 schema 允許的文字階層與 provenance，不夾帶未定義 image/base64 欄位。
+- F 的 chunk 必須可追溯至 `dx_pair_id`、`literature_id` 與 `section_id`。
+- retrieval runtime 不得在缺少 index/model 時靜默重建、改用其他 host 路徑或回退成未記錄的方法。
+- `prepare_literature` 是主 DAG 前的獨立準備步驟；若改成接受 `--input` artifact，必須先定義其
+  canonical contract。DAG runtime 的 `knowledge_retrieval` 仍遵守重複 `--input` 的 Unified CLI。
 
-A v2 保留 cleanSections 的 `level/title_list/title/href/sections`，並加入
-`literature_id/source_idx/section_id/section_idx`。空的 navigation nodes 也要保留，才可直接和來源
-比對。`images` 不進 A；字串 `"None"` 留在 A，但 retrieval 不建立對應 candidate。
+Canonical schemas：
 
-目前 demo 直接掃描 A 的 sections。正式建立外部 index 時，也必須以 `section_id` 作最小 indexing
-單位並保留 `literature_id`，不可只存文字後丟失 WHO 章節位置。
+- `contracts/schemas/A_literature.schema.json`
+- `contracts/schemas/D_dx_pairs.schema.json`
+- `contracts/schemas/F_chunks.schema.json`
 
-## Knowledge base 本體放哪裡
+## 2. 交換 JSON 結構示例
 
-大型 index 不屬於 Git repository，也不屬於 Docker image。建議：
+以下 `<...>` 代表文件中省略的 required fields；短版片段不可取代完整 canonical fixture。
+`prepare_literature` 的原始 corpus 尚不是中央交換 contract，因此來源格式必須由乙的 adapter 與 README
+明確版本化；跨元件交換從 `[A]` 開始。
 
-```text
-/data/knowledge-base/
-└── pathology-literature/
-    └── kb-2026-08-15/
-        ├── index files ...
-        ├── manifest.json
-        └── build-log.json
+### Literature preparation source：乙自行版本化的外部來源
+
+```json
+{
+  "source_version": "<owner-defined version>",
+  "documents": [
+    {
+      "source_idx": 0,
+      "title": "Synthetic literature",
+      "sections": [
+        {
+          "section_idx": 0,
+          "title": "Example",
+          "text": "Synthetic text for contract testing."
+        }
+      ]
+    }
+  ]
+}
 ```
 
-`manifest.json` 至少記錄：
+這只是 adapter 輸入示意，不得標成 `[A]`。正式交付需說明來源 schema、revision 與如何轉換為 A。
 
-- knowledge base ID/version
-- 原始 corpus 版本或 checksum
-- chunking 參數
-- embedding model name/revision/hash
-- 建立時間與程式版本
+### Literature preparation output：`[A] A.Literature@2.0`
 
-container 以 `/knowledge-base:ro` mount 讀取。config 記邏輯位置 `/knowledge-base/...`，不要記
-`/home/某人/...`。
+```json
+{
+  "contract": "A.Literature",
+  "schema_version": "2.0",
+  "artifact_id": "A-corpus-v1",
+  "producer": "person-b/literature-preparation:<version>",
+  "payload": {
+    "corpus": {
+      "corpus_id": "corpus-v1",
+      "title": "Synthetic literature",
+      "source_file": "synthetic-source.json",
+      "source_path": "reference/person_b/checkpoint/synthetic-source.json",
+      "sha256": "<source sha256>",
+      "source_size_bytes": 123,
+      "literature_count": 1
+    },
+    "literature_list": [
+      {
+        "literature_id": "lit-001",
+        "source_idx": 0,
+        "level": 1,
+        "title_list": ["Synthetic literature", null, null, null],
+        "title": "Synthetic literature",
+        "href": null,
+        "sections": [
+          {
+            "section_id": "sec-001",
+            "section_idx": 0,
+            "title": "Example",
+            "text": "Synthetic text for contract testing."
+          }
+        ]
+      }
+    ]
+  }
+}
+```
 
-## F.Chunks 必須保留的 provenance
+### Knowledge Retrieval second input：`[D] D.DxPairs@2.0`
 
-- `chunk_id`：這次交換資料中的唯一 ID。
-- `dx_pair_id`：它是在回答哪一個 D。
-- `literature_id`：可追回 A/corpus 的哪篇文獻。
-- `section_id`：可追回 A 中確切的 section。
-- `source_idx/section_idx`：可對照原始 cleanSections 順序。
-- `title_list/literature_title/section_title/source_href`：保留文獻階層與來源頁面。
-- `text`：給甲 query generation 的實際 evidence text。
-- `relevance_score`：定義分數範圍及方向；本 contract 是 0～1，越大越相關。
+```json
+{
+  "contract": "D.DxPairs",
+  "schema_version": "2.0",
+  "artifact_id": "D-case-001",
+  "case_id": "case-001",
+  "producer": "person-a/report-decompose:<version>",
+  "payload": {
+    "data_mode": "inference",
+    "DxItem_list": ["Histologic_Type"],
+    "case_list": [
+      {
+        "case_id": "case-001",
+        "structured_report": {
+          "DxItems": {
+            "Histologic_Type": {
+              "dx_pair_id": "case-001-dx-001",
+              "DxResultTxt": "<retrieval query source>",
+              "<其餘 DxItem fields>": "見 metadata_case_payload.schema.json"
+            }
+          }
+        },
+        "<其餘 metadata-shaped case fields>": "見 metadata schema"
+      }
+    ]
+  }
+}
+```
 
-若真實 retrieval 另有 distance、rank、page、section 等欄位，先與 producer/consumer 討論是否
-加入 F v2.x；不要塞進未定義的 `metadata` 讓每個人自行猜。
+### Knowledge Retrieval output：`[F] F.Chunks@2.0`
 
-## 套件、模型、機密的分工
+```json
+{
+  "contract": "F.Chunks",
+  "schema_version": "2.0",
+  "artifact_id": "F-case-001",
+  "case_id": "case-001",
+  "producer": "person-b/knowledge-retrieval:<version>",
+  "payload": {
+    "corpus_id": "corpus-v1",
+    "knowledge_base": {
+      "knowledge_base_id": "kb-v1",
+      "archive_path": "reference/person_b/checkpoint/kb-v1",
+      "archive_sha256": "<archive sha256>",
+      "corpus_sha256": "<same corpus sha256 as A>",
+      "embedding_model_path": "reference/person_b/checkpoint/embedding-model",
+      "embedding_model_sha256": "<model sha256>",
+      "document_count": 1,
+      "max_tokens": 512,
+      "query_max_tokens": 128,
+      "retrieval_mode": "hybrid",
+      "top_k": 1,
+      "candidate_k": 1,
+      "hybrid_weights": {"dense": 0.5, "sparse": 0.5}
+    },
+    "chunks": [
+      {
+        "chunk_id": "chunk-001",
+        "dx_pair_id": "case-001-dx-001",
+        "literature_id": "lit-001",
+        "section_id": "sec-001",
+        "source_idx": 0,
+        "section_idx": 0,
+        "title_list": ["Synthetic literature", null, null, null],
+        "literature_title": "Synthetic literature",
+        "section_title": "Example",
+        "source_href": null,
+        "text": "Synthetic text for contract testing.",
+        "indexed_token_count": 6,
+        "retrieval_rank": 1,
+        "dense_score": 0.8,
+        "dense_rank": 1,
+        "sparse_score": 0.7,
+        "sparse_rank": 1,
+        "relevance_score": 0.9
+      }
+    ]
+  }
+}
+```
 
-- Python client/library：`requirements.txt`。
-- `libpq`、compiler 等 OS package：`Dockerfile`。
-- embedding checkpoint：外部 `/models/person-b/...` 唯讀 mount。
-- vector DB endpoint：config 或 environment variable。
-- password/token：secret/environment variable，不進 Git。
-- index/corpus：外部 `/data/knowledge-base/...`。
+交換 linkage 為 `A.corpus_id/literature_id/section_id`、`D.case_id/dx_pair_id` 與 F 中對應欄位。
 
-## 交付前自己跑
+## 3. 打包準備
+
+```text
+WLW_GPintegrate/components/person_b/       # 程式與非敏感設定
+reference/person_b/checkpoint/             # embedding model、index、corpus snapshot 等大型資產
+reference/person_b/template_ref/           # 可版本化的檢索模板或 mapping
+run/input/pipeline/A_literature.json        # pipeline 共用 A
+run/output/pipeline/cases/<case_id>/        # 每案 F 與後續 artifact
+```
+
+- 環境：Dockerfile、requirements；模型 framework 與 binary dependency 固定版本。
+- 超參數：retrieval mode、top-k、token limit、batch size、index filter 等只放 configs。
+- 程式：corpus adapter、index builder、retriever 分層，避免 runtime 隱式修改 reference。
+- 外部參考：corpus、embedding model、index archive 放 `reference/person_b/`，不進 image。
+- 外部資產 manifest 至少記錄 corpus/index/model 的 revision、SHA-256、相依關係與預期檔名。
+
+## 4. Unified CLI
+
+主 DAG 的容器介面：
 
 ```bash
-python3 -m components.person_b.prepare_literature \
-  --source ../cleanSections_metaList_2603201640.json \
-  --output /tmp/A_literature.json \
-  --config components/person_b/configs/prepare_literature.default.json
-
-python3 pipeline/run_pipeline.py
-
-python3 -m components.person_b.knowledge_retrieval \
-  --input integration/fixtures/input/A_literature.json \
-  --input integration/artifacts-local/cases/case-001/D_dx_pairs.json \
-  --output /tmp/F_chunks.json \
-  --config components/person_b/configs/default.json
-
-python3 -m unittest discover -s tests -v
+component \
+  --input /input/A_literature.json \
+  --input /input/D_dx_pairs.json \
+  --output /output/F_chunks.json \
+  --config /config/knowledge_retrieval.yaml
 ```
 
-## 完成定義
+目前 Python／JSON config 形式：
 
-- 能接受 canonical D，而不 import 甲的 package。
-- A/F 通過 schema，且每個 chunk 都能 trace 到 `dx_pair_id`、`literature_id` 與 `section_id`。
-- knowledge base/model revision 被記錄，不依賴「目前 server 上剛好那一版」。
-- 無結果、index 不存在、credential 缺失時有明確錯誤與 non-zero exit code。
-- Docker image 不包含 corpus、index、credential 或大型 checkpoint。
+```bash
+python pipeline/run_prepare_literature.py
+
+python -m components.person_b.knowledge_retrieval \
+  --input ../run/input/pipeline/A_literature.json \
+  --input ../run/output/work/D_dx_pairs.json \
+  --output ../run/output/work/F_chunks.json \
+  --config components/person_b/configs/example.json
+```
+
+所有 input 先依 contract 辨識，不依參數位置；corpus/index digest 不一致、模型缺失、D case 不合法或
+輸出驗證失敗時必須 non-zero exit。
+
+## 5. Dockerfile／requirements.txt
+
+目前 stub 是 Python 3.12、CPU、standard library。正式版本若加入向量資料庫、embedding framework、
+GPU runtime 或原生 binary，必須全部固定於 requirements 與 Dockerfile，並從 clean machine 建置：
+
+```bash
+docker build --no-cache \
+  -f components/person_b/Dockerfile \
+  -t wlw/person-b:<version> .
+```
+
+image 內不得包含 corpus、index、checkpoint、token 或 cache。必須分別驗證 index preparation 與
+case-level retrieval；README 說明 CPU fallback、GPU 數量、最低 VRAM、RAM 峰值、磁碟需求與 timeout。
+
+## 6. Canonical examples
+
+至少交付：
+
+```text
+components/person_b/examples/
+├── prepare_literature/
+│   ├── source.synthetic.json
+│   ├── A_literature.expected.json
+│   ├── config.example.json
+│   └── README.md
+└── knowledge_retrieval/
+    ├── A_literature.valid.json
+    ├── D_dx_pairs.valid.json
+    ├── F_chunks.expected.json
+    ├── config.example.json
+    └── README.md
+```
+
+範例文獻必須是合成或可再散布內容，不得擷取受限制 corpus。expected F 應固定排序／tie-break 規則；
+若 backend 非決定性，README 必須定義容許誤差與必要欄位。
+
+## 7. README 必填資訊
+
+列出 component version、A/F schema version、corpus 名稱與 revision、retrieval/index 方法、embedding
+模型與 revision、Python/framework、GPU/VRAM 或 CPU/RAM、checkpoint/index logical path 與 SHA-256、
+index 建置命令、runtime CLI、Docker build/run、canonical example、失敗條件與已知限制。
+
+## 8. 提交檢查
+
+- [ ] A 與 F 通過 canonical schema，F 的來源 ID 均能追回 A/D。
+- [ ] corpus、model、index 與 config digest 關係已記錄並可驗證。
+- [ ] clean-machine 可建 index、啟動 runtime，且不依賴 host cache。
+- [ ] source、configs、examples、tests、Dockerfile、requirements、README、PREPARATION 已提交。
+- [ ] 外部資產只放 `reference/person_b/`；corpus/index/checkpoint 本體不提交至 Git 或 image。
+- [ ] 根目錄 contract 與 pipeline tests 全部通過。

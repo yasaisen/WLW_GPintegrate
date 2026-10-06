@@ -1,201 +1,241 @@
+"""Person A Report Decompose: one normalized CaseList case to D.DxPairs.
+
+Hospital Excel/WSI discovery is intentionally kept outside this runtime
+boundary. ``prepare_case_list`` is the upstream compatibility adapter for the
+legacy B.ReportTables manifest.
+"""
+
 from __future__ import annotations
 
-from collections import defaultdict
+from copy import deepcopy
 import logging
-from pathlib import Path
-import re
 from typing import Any
 
 from components.person_a.reference_data import load_dx_candidates
 from components.person_a.report_extraction import ReportExtractionEngine
-from components.person_a.table_parsers import parse_report_tables
-from contracts.runtime import cli_parser, load_config, load_inputs, write_artifact
+from contracts.runtime import (
+    cli_parser,
+    load_case_list_input,
+    load_config,
+    write_artifact,
+)
 
 
-def _case_directory_name(case_id: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", case_id).strip("._")
-    if not safe:
-        raise ValueError(f"case_id cannot be represented as a directory name: {case_id!r}")
-    return safe
+def _component_version(config: dict[str, Any]) -> str:
+    version = config.get("component_version")
+    if not isinstance(version, str) or not version:
+        raise ValueError("report_decompose config requires component_version")
+    return version
+
+
+def _example_artifact(
+    source: dict[str, Any], producer: str
+) -> dict[str, Any]:
+    """Keep the public repository smoke test independent of private assets."""
+
+    case = deepcopy(source["case_list"][0])
+    case_id = case["case_id"]
+    records: dict[str, dict[str, Any]] = {}
+    for index, name in enumerate(source["DxItem_list"]):
+        records[name] = {
+            "dx_pair_id": f"{case_id}-example-dx-{index + 1:03d}",
+            "source_report_id": f"{case_id}-example-report",
+            "DxResultCls": "Not implemented",
+            "DxResultTxt": "Example stub; replace with Person A implementation.",
+            "DxResultRawTxt": None,
+            "referenceBlock": None,
+            "referenceType": [],
+            "referenceWSI": [],
+            "appear_reportTypes": [],
+            "optionTypes": "example",
+            "has_numericalData": False,
+        }
+    case["structured_report"] = {
+        "reportType": None,
+        "reportSubTypes": [],
+        "DxItems": records,
+    }
+    for block in case["tissue_blocks"]:
+        for stain in block["stains"]:
+            stain["roi_num"] = 0
+            stain["roi_list"] = []
+    return {
+        "contract": "D.DxPairs",
+        "schema_version": "2.0",
+        "artifact_id": f"D-example-{case_id}",
+        "case_id": case_id,
+        "producer": producer,
+        "payload": {
+            "data_mode": "inference",
+            "DxItem_list": list(source["DxItem_list"]),
+            "reference_versions": {
+                "example_stub": {
+                    "implemented": False,
+                    "purpose": "contract smoke test",
+                }
+            },
+            "case_list": [case],
+        },
+    }
+
+
+def _internal_case(source_case: dict[str, Any]) -> dict[str, Any]:
+    """Convert the canonical source case to the extraction-engine shape."""
+
+    case_id = source_case["case_id"]
+    wsis: list[dict[str, Any]] = []
+    for block in source_case["tissue_blocks"]:
+        for stain in block["stains"]:
+            wsis.append(
+                {
+                    "wsi_id": stain["stain_id"],
+                    "stain_type": stain["stain_type"],
+                    "wsi_path": stain["filepath"],
+                    "block_id": block["block_id"],
+                }
+            )
+    return {
+        "case_id": case_id,
+        "hospital": source_case["hospital"],
+        "reports": [
+            {
+                "report_id": f"{case_id}-report",
+                "raw_text": source_case["report_raw_content"],
+            }
+        ],
+        "wsis": wsis,
+        "observations": [],
+        "dx_pairs": [],
+    }
 
 
 def _reference_wsi_ids(
-    observation: dict[str, Any], wsis: list[dict[str, Any]], definition: dict[str, Any]
+    pair: dict[str, Any], wsis: list[dict[str, Any]], definition: dict[str, Any]
 ) -> list[str]:
-    explicit = observation["reference_wsi_ids"]
+    explicit = pair.get("reference_wsi_ids") or []
     if explicit:
-        return explicit
+        return list(explicit)
     reference_types = definition.get("referenceType", [])
     if not reference_types:
         return [wsi["wsi_id"] for wsi in wsis]
-    allowed = {item.upper() for item in reference_types}
-    return [wsi["wsi_id"] for wsi in wsis if wsi["stain_type"].upper() in allowed]
+    allowed = {str(item).upper() for item in reference_types}
+    return [
+        wsi["wsi_id"]
+        for wsi in wsis
+        if str(wsi["stain_type"]).upper() in allowed
+    ]
 
 
-def _metadata_case(
-    case: dict[str, Any],
-    sample_idx: int,
+def _reference_blocks(
+    reference_wsi: list[str], wsis: list[dict[str, Any]]
+) -> list[str] | None:
+    selected = set(reference_wsi)
+    blocks = list(
+        dict.fromkeys(
+            str(wsi["block_id"])
+            for wsi in wsis
+            if wsi["wsi_id"] in selected and str(wsi["block_id"])
+        )
+    )
+    return blocks or None
+
+
+def _structured_case(
+    source_case: dict[str, Any],
+    extracted: dict[str, Any],
     catalog: dict[str, Any],
+    *,
     strict_result_classes: bool,
 ) -> dict[str, Any]:
     dx_items: dict[str, dict[str, Any]] = {}
-    for pair in case["dx_pairs"]:
-        item_name = pair["dx_item"]
-        if item_name not in catalog:
-            raise ValueError(
-                f"Case {case['case_id']!r} contains unsupported DxItem {item_name!r}; "
-                "add it to DxStructuredCandidates_integrated.json before using it"
-            )
-        if item_name in dx_items:
-            raise ValueError(
-                f"Case {case['case_id']!r} contains duplicate DxItem {item_name!r}; "
-                "the metadata-shaped contract uses one record per DxItem"
-            )
-        definition = catalog[item_name]
+    for pair in extracted["dx_pairs"]:
+        name = pair["dx_item"]
+        definition = catalog[name]
         result = pair["dx_result"]
         allowed_results = definition.get("DxResultCls", [])
         if strict_result_classes and allowed_results and result not in allowed_results:
             raise ValueError(
-                f"Case {case['case_id']!r} {item_name} result {result!r} is not in "
-                "DxStructuredCandidates_integrated.json"
+                f"Case {source_case['case_id']!r} {name} result {result!r} "
+                "is not in the configured diagnostic candidates"
             )
-        dx_items[item_name] = {
+        reference_wsi = _reference_wsi_ids(pair, extracted["wsis"], definition)
+        dx_items[name] = {
             "dx_pair_id": pair["dx_pair_id"],
             "source_report_id": pair["source_report_id"],
             "DxResultCls": result,
             "DxResultTxt": pair.get("dx_result_text", result),
             "DxResultRawTxt": pair.get("dx_result_raw_text", result),
-            "referenceBlock": None,
+            "referenceBlock": _reference_blocks(reference_wsi, extracted["wsis"]),
             "referenceType": list(definition.get("referenceType", [])),
-            "referenceWSI": _reference_wsi_ids(pair, case["wsis"], definition),
+            "referenceWSI": reference_wsi,
             "appear_reportTypes": list(definition.get("appear_reportTypes", [])),
             "optionTypes": definition["optionTypes"],
             "has_numericalData": definition["has_numericalData"],
         }
 
-    blocks: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for wsi in case["wsis"]:
-        block_id = wsi["block_id"] or "block-001"
-        blocks[block_id].append(
-            {
-                "stain_id": wsi["wsi_id"],
-                "stain_type": wsi["stain_type"],
-                "filename": Path(wsi["wsi_path"]).name,
-                "filepath": wsi["wsi_path"],
-                "memo": "",
-                "roi_num": 0,
-                "roi_list": [],
-            }
-        )
+    case = deepcopy(source_case)
+    case["structured_report"] = {
+        "reportType": None,
+        "reportSubTypes": [],
+        "DxItems": dx_items,
+    }
+    for block in case["tissue_blocks"]:
+        for stain in block["stains"]:
+            stain["roi_num"] = 0
+            stain["roi_list"] = []
+    return case
 
-    reports = [
-        {
-            "report_id": report["report_id"],
-            "table_idx": report["table_idx"],
-            "source": report["source"],
-        }
-        for report in case["reports"]
-    ]
-    raw_reports = list(dict.fromkeys(report["raw_text"] for report in case["reports"]))
+
+def build_artifact(
+    source: dict[str, Any], config: dict[str, Any]
+) -> dict[str, Any]:
+    producer = _component_version(config)
+    if config.get("mode") == "example":
+        return _example_artifact(source, producer)
+
+    candidate_reference, candidate_provenance = load_dx_candidates(
+        config["dx_candidates_path"]
+    )
+    full_catalog = candidate_reference["DxItems"]
+    requested = source["DxItem_list"]
+    unknown = [name for name in requested if name not in full_catalog]
+    if unknown:
+        raise ValueError(f"CaseList requests unknown DxItems: {unknown}")
+    catalog = {name: full_catalog[name] for name in requested}
+
+    extracted = _internal_case(source["case_list"][0])
+    extraction = ReportExtractionEngine(catalog, config.get("report_extraction"))
+    extraction.fill_case(extracted)
+    case = _structured_case(
+        source["case_list"][0],
+        extracted,
+        catalog,
+        strict_result_classes=extraction.strict_result_classes,
+    )
+    case_id = case["case_id"]
     return {
-        "sample_idx": sample_idx,
-        "case_id": case["case_id"],
-        "hospital": case["hospital"],
-        "patient_info": {},
-        "date": "",
-        "source": {"reports": reports},
-        "organ": "Breast",
-        "report_raw_content": "\n\n".join(raw_reports),
-        "structured_report": {
-            "reportType": None,
-            "reportSubTypes": None,
-            "DxItems": dx_items,
+        "contract": "D.DxPairs",
+        "schema_version": "2.0",
+        "artifact_id": f"D-{case_id}",
+        "case_id": case_id,
+        "producer": producer,
+        "payload": {
+            "data_mode": "inference",
+            "DxItem_list": list(requested),
+            "reference_versions": {"dx_candidates": candidate_provenance},
+            "case_list": [case],
         },
-        "tissue_blocks": [
-            {
-                "block_id": block_id,
-                "stains": sorted(stains, key=lambda item: item["stain_id"]),
-                "memo": "",
-            }
-            for block_id, stains in sorted(blocks.items())
-        ],
-        "memo": "",
     }
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    args = cli_parser("甲: decompose report tables into per-case D.DxPairs").parse_args()
-    report_tables = load_inputs(args.input, ["B.ReportTables"])["B.ReportTables"]
+    args = cli_parser("Person A: one CaseList case to D.DxPairs").parse_args()
+    if len(args.input) != 1:
+        raise ValueError("report_decompose accepts exactly one CaseList input")
+    source = load_case_list_input(args.input[0], single_case=True)
     config = load_config(args.config)
-    candidate_reference, candidate_provenance = load_dx_candidates(
-        config["dx_candidates_path"]
-    )
-    catalog = candidate_reference["DxItems"]
-    input_manifest = Path(args.input[0]).resolve()
-    output_index = Path(args.output).resolve()
-
-    parsed = parse_report_tables(
-        report_tables["payload"]["tables"], input_manifest.parent
-    )
-    if not parsed.cases:
-        raise ValueError("Report Decompose produced no cases containing both report and WSI data")
-
-    extraction = ReportExtractionEngine(catalog, config.get("report_extraction"))
-    index_entries = []
-    used_directories: set[str] = set()
-    for sample_idx, case in enumerate(parsed.cases):
-        extraction.fill_case(case)
-        case_id = case["case_id"]
-        directory_name = _case_directory_name(case_id)
-        if directory_name in used_directories:
-            raise ValueError(f"Case directory collision after normalization: {case_id!r}")
-        used_directories.add(directory_name)
-
-        artifact_path = output_index.parent / "cases" / directory_name / "D_dx_pairs.json"
-        artifact = {
-            "contract": "D.DxPairs",
-            "schema_version": "2.0",
-            "artifact_id": f"D-{case_id}",
-            "case_id": case_id,
-            "producer": config["component_version"],
-            "payload": {
-                "data_mode": "inference",
-                "DxItem_list": list(catalog),
-                "reference_versions": {"dx_candidates": candidate_provenance},
-                "case_list": [
-                    _metadata_case(
-                        case,
-                        sample_idx,
-                        catalog,
-                        extraction.strict_result_classes,
-                    )
-                ],
-            },
-        }
-        write_artifact(artifact, artifact_path, "D.DxPairs")
-        index_entries.append(
-            {
-                "case_id": case_id,
-                "artifact_path": str(artifact_path.relative_to(output_index.parent)),
-            }
-        )
-
-    index_artifact = {
-        "contract": "D.DxPairsIndex",
-        "schema_version": "1.0",
-        "artifact_id": f"D-index-{report_tables['artifact_id']}",
-        "producer": config["component_version"],
-        "payload": {
-            "cases": index_entries,
-            "skipped_cases": parsed.skipped_cases,
-        },
-    }
-    write_artifact(index_artifact, output_index, "D.DxPairsIndex")
-    print(
-        f"Report Decompose produced {len(index_entries)} cases; "
-        f"skipped {len(parsed.skipped_cases)}"
-    )
+    write_artifact(build_artifact(source, config), args.output, "D.DxPairs")
 
 
 if __name__ == "__main__":

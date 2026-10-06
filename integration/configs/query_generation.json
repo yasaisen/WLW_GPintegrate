@@ -1,6 +1,0 @@
-{
-  "component_version": "person-a/query-generation:0.3.0",
-  "histologic_mapping_path": "/home/yasaisen/Desktop/27_research/research_main_v3/lab_20/Histologic_Type_mappingTable.json",
-  "candidate_reference_path": "/home/yasaisen/Desktop/27_research/research_main_v3/lab_19/reference/candidateReference.json",
-  "type_level_path": "/home/yasaisen/Desktop/27_research/research_main_v3/lab_20/[typeLevel]visualAttrs_v1.2.1_2603241656.json"
-}

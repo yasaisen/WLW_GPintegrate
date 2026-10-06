@@ -11,9 +11,14 @@ import tempfile
 from typing import Any, Mapping, Sequence
 
 from contracts.metadata import iter_rois
+from contracts.paths import (
+    PROJECT_ROOT,
+    RUN_ROOT,
+    resolve_person_reference_path,
+    resolve_run_path,
+)
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FINAL_RESULT_KEY = "finalResult"
 UNABLE_TO_DETERMINE = "unable_to_determine"
 
@@ -52,10 +57,11 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def resolve_project_path(raw_path: str | None) -> Path | None:
+    """Resolve a configured CLEE asset below the sibling reference root."""
+
     if raw_path is None:
         return None
-    path = Path(raw_path)
-    return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
+    return resolve_person_reference_path("person_e", raw_path)
 
 
 def _checkpoint_paths(config: Mapping[str, Any]) -> tuple[Path, Path]:
@@ -135,10 +141,25 @@ def load_checkpoint_support(config: Mapping[str, Any]) -> CheckpointSupport:
     if config_active_results != threshold_active_results:
         raise ValueError("CLEE config/threshold active_DxResult_dict mismatch")
 
-    wlw_whitelist = tuple(str(item) for item in config["wlw_supported_dx_items"])
-    effective_items = tuple(
-        item for item in wlw_whitelist if item in config_active_items
-    )
+    raw_policy = config.get("wlw_supported_dx_items")
+    if raw_policy is None:
+        # The checkpoint and its validation-calibrated threshold bundle are the
+        # authoritative declaration of the label space.  A deployment may
+        # still provide an explicit list to narrow (never expand) that space.
+        effective_items = config_active_items
+    elif (
+        isinstance(raw_policy, Sequence)
+        and not isinstance(raw_policy, (str, bytes))
+        and all(isinstance(item, str) and item for item in raw_policy)
+    ):
+        wlw_whitelist = tuple(dict.fromkeys(str(item) for item in raw_policy))
+        effective_items = tuple(
+            item for item in wlw_whitelist if item in config_active_items
+        )
+    else:
+        raise ValueError(
+            "wlw_supported_dx_items must be null or a list of nonempty strings"
+        )
 
     case_importance = threshold_bundle.get("case_importance", {}).get(
         "by_DxItem", {}
@@ -162,6 +183,11 @@ def load_checkpoint_support(config: Mapping[str, Any]) -> CheckpointSupport:
             result_info = item_thresholds.get(DxResult)
             if not isinstance(result_info, Mapping):
                 raise ValueError(f"Missing CLEE ROI threshold for {DxItem}/{DxResult}")
+            if result_info.get("comparison") != ">=":
+                raise ValueError(
+                    f"Unsupported CLEE ROI threshold comparison for "
+                    f"{DxItem}/{DxResult}"
+                )
             raw_threshold = result_info.get("threshold")
             roi_thresholds[DxItem][DxResult] = (
                 None if raw_threshold is None else float(raw_threshold)
@@ -298,7 +324,11 @@ def run_external_backend(
     """Invoke an inference-only CLEE CLI and read its metadata output."""
 
     backend = config["backend"]
-    with tempfile.TemporaryDirectory(prefix="wlw-clee-") as temp_dir:
+    work_root = RUN_ROOT / "output" / "work"
+    work_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="wlw-clee-", dir=work_root
+    ) as temp_dir:
         temporary_dir = Path(temp_dir)
         input_path = temporary_dir / "input_metadata.json"
         output_path = temporary_dir / "output_metadata.json"
@@ -309,10 +339,18 @@ def run_external_backend(
         replacements = {
             "input_metadata": str(input_path),
             "output_metadata": str(output_path),
+            "output_dir": str(temporary_dir),
             "checkpoint_dir": str(
                 resolve_project_path(config.get("checkpoint_dir")) or ""
             ),
-            "image_root": str(resolve_project_path(config.get("image_root")) or ""),
+            "image_root": str(
+                resolve_run_path(config["image_root"])
+                if config.get("image_root")
+                else ""
+            ),
+            "weight_path": str(
+                resolve_project_path(config.get("model_weight_path")) or ""
+            ),
             "max_roi_dxitem_inputs_per_forward": str(
                 int(config["max_roi_dxitem_inputs_per_forward"])
             ),
@@ -372,6 +410,21 @@ def run_backend(
         )
     if mode == "external_command":
         return run_external_backend(input_payload=input_payload, config=config)
+    if mode == "native":
+        # Keep torch/transformers/OpenSlide imports out of fixture and contract
+        # tests; the production dependencies are loaded only for real inference.
+        from components.person_e.native_inference import run_native_inference
+
+        return BackendResult(
+            predictions_by_roi_id=run_native_inference(
+                input_payload=input_payload,
+                DxItem=DxItem,
+                case_label=case_label,
+                support=support,
+                config=config,
+            ),
+            execution_status="native_completed",
+        )
     if mode == "deferred":
         return BackendResult(
             predictions_by_roi_id={},

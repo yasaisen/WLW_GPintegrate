@@ -1,11 +1,20 @@
 name: clee
 owner: person_E
-version: 0.4.0
+version: 1.0.0
 inputs: [D.DxPairs@2.0, H.MatchedROIs@2.0]
 outputs: [I.CLEESelectedROIs@2.0]
 runtime:
-  python: "3.12"
-  gpu: false
-  cpu: 2
-  memory_gb: 4
+  python: "3.10"
+  cuda: "11.8"
+  gpu: true
+  gpu_count_min: 1
+  vram_gb_min: 16
+  cpu: 4
+  memory_gb: 32
+  timeout_seconds: 3600
+models:
+  - name: medgemma-1.5-4b-it
+    configured_by: configs/native.json:backend.model.weight_path
+  - name: clee-prefix-260805142953
+    configured_by: configs/native.json:checkpoint_dir
 entrypoint: python -m components.person_e.clee

@@ -1,0 +1,21 @@
+{
+  "component_version": "person-e/clee:1.0.0",
+  "backend": {
+    "mode": "native",
+    "model": {
+      "weight_path": "../reference/person_e/checkpoint",
+      "embedding_path": "../reference/person_e/checkpoint/DxItem_embeddings_2607231639.pt",
+      "device": "cuda",
+      "dtype": "bfloat16",
+      "attn_implementation": "sdpa",
+      "pp_num_gpus": null,
+      "deep_prefix_debug_log": false
+    }
+  },
+  "wlw_supported_dx_items": null,
+  "checkpoint_config_path": null,
+  "threshold_bundle_path": null,
+  "checkpoint_dir": "../reference/person_e/checkpoint/clee-260805142953",
+  "image_root": null,
+  "max_roi_dxitem_inputs_per_forward": 500
+}

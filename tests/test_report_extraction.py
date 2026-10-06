@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import csv
-import json
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,17 +11,17 @@ from components.person_a.histologic_type_classifier import (
 )
 from components.person_a.medgemma_extractor import _chunks, _json_object
 from components.person_a.medgemma_extractor import _canonical_key
+from components.person_a.prepare_case_list import build_case_list
 from components.person_a.reference_data import load_dx_candidates
+from components.person_a.report_decompose import build_artifact
 from components.person_a.report_extraction import (
     ReportExtractionEngine,
     extract_cgmh_items,
     extract_labeled_items,
     extract_vghtc_items,
 )
-from contracts.runtime import validate_artifact
-
-
-ROOT = Path(__file__).resolve().parents[1]
+from contracts.paths import REFERENCE_ROOT
+from contracts.runtime import validate_artifact, validate_case_list_input
 
 
 def _definition(result: str, reference_type: list[str]) -> dict[str, object]:
@@ -58,11 +55,8 @@ class ReportExtractionTests(unittest.TestCase):
 
     def test_packaged_candidates_restrict_only_histologic_type(self) -> None:
         candidate_path = (
-            ROOT
-            / "components"
-            / "person_a"
-            / "references"
-            / "DxStructuredCandidates_integrated.json"
+            REFERENCE_ROOT
+            / "person_a/template_ref/DxStructuredCandidates_integrated.json"
         )
         structured_report, _ = load_dx_candidates(candidate_path)
         catalog = structured_report["DxItems"]
@@ -360,7 +354,7 @@ Gross description: Histologic Type: this must not replace the diagnosis.
         self.assertEqual("Model histologic type", results["Histologic_Type"])
         self.assertEqual("Positive", results["ER_status"])
 
-    def test_b_report_tables_without_precomputed_results_produces_d(self) -> None:
+    def test_b_is_normalized_to_case_list_before_single_case_d(self) -> None:
         histologic = "Invasive carcinoma of no special type (ductal)."
         with tempfile.TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)
@@ -405,21 +399,20 @@ Gross description: Histologic Type: this must not replace the diagnosis.
                     ]
                 },
             }
-            manifest_path = directory / "B_report_tables.json"
-            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            case_list, skipped = build_case_list(
+                manifest,
+                directory,
+                {"dx_item_list": ["Histologic_Type"]},
+            )
+            validate_case_list_input(case_list, single_case=True)
+            self.assertEqual([], skipped)
 
-            candidates = {
-                "structured_report": {
-                    "DxItems": {
-                        "Histologic_Type": _definition(histologic, ["HE"])
-                    }
-                }
-            }
-            candidates_path = directory / "DxStructuredCandidates_integrated.json"
-            candidates_path.write_text(json.dumps(candidates), encoding="utf-8")
             config = {
-                "component_version": "person-a/report-decompose:test",
-                "dx_candidates_path": str(candidates_path),
+                "component_version": "person-a/report-decompose:0.8.0-test",
+                "dx_candidates_path": str(
+                    REFERENCE_ROOT
+                    / "person_a/template_ref/DxStructuredCandidates_integrated.json"
+                ),
                 "report_extraction": {
                     "enabled": True,
                     "backend": "regex",
@@ -427,37 +420,13 @@ Gross description: Histologic Type: this must not replace the diagnosis.
                     "strict_result_classes": True,
                 },
             }
-            config_path = directory / "report_decompose.json"
-            config_path.write_text(json.dumps(config), encoding="utf-8")
-
-            index_path = directory / "artifacts" / "D_dx_pairs_index.json"
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "components.person_a.report_decompose",
-                    "--input",
-                    str(manifest_path),
-                    "--output",
-                    str(index_path),
-                    "--config",
-                    str(config_path),
-                ],
-                cwd=ROOT,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-
-            index = json.loads(index_path.read_text(encoding="utf-8"))
-            validate_artifact(index, "D.DxPairsIndex")
-            d_path = index_path.parent / index["payload"]["cases"][0]["artifact_path"]
-            artifact = json.loads(d_path.read_text(encoding="utf-8"))
+            artifact = build_artifact(case_list, config)
             validate_artifact(artifact, "D.DxPairs")
             case_payload = artifact["payload"]["case_list"][0]
             item = case_payload["structured_report"]["DxItems"]["Histologic_Type"]
-            self.assertEqual(histologic, item["DxResultCls"])
+            self.assertEqual("IC", item["DxResultCls"])
             self.assertEqual(histologic, item["DxResultTxt"])
+            self.assertEqual(["A"], item["referenceBlock"])
             self.assertEqual(["case-raw-001-he"], item["referenceWSI"])
 
 
