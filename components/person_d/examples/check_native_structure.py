@@ -1,10 +1,11 @@
 """Check a native-mode H against H_matches.native.structure.json.
 
-Deterministic decisions must match exactly; model-dependent decisions must use
-one of the allowed statuses and reasons.  For model-dependent decisions the score
-is recomputed from the per-attribute decisions in visualAttrs_info.matching and
-must agree within score_rule.score_tolerance, and the status/reason must follow
-score_rule.  Exit code 0 means the H matches.
+Events listed with ``status`` must match exactly; events listed with
+``status_in``/``reason_in`` must use one of the allowed values.  For every event
+that went through matching, the score is recomputed from the per-attribute
+decisions in visualAttrs_info.matching and must agree within
+score_rule.score_tolerance, and the status/reason must follow score_rule.  Exit
+code 0 means the H matches.
 
     python components/person_d/examples/check_native_structure.py \
       components/person_d/examples/H_matches.native.structure.json \
@@ -45,14 +46,15 @@ def expected_outcome(rule: dict, event: dict, matching: dict) -> tuple[float, tu
     unverified = any(
         result["requires_must_true"] and result["status"] != "evaluated" for result in attributes
     )
-    if rule["unverified_must_true"] == "reject" and unverified:
-        must_true_failed = True
+    reject_unverified = rule["unverified_must_true"] == "reject" and unverified
 
     if len(evaluated) < rule["min_evaluated_attributes"]:
         outcome = ("skipped", "insufficient_visual_evidence")
-    elif must_false_failed or must_true_failed:
+    elif must_false_failed or must_true_failed or reject_unverified:
         outcome = ("rejected", "must_condition_failed")
-    elif event["score"] < rule["score_threshold"]:
+    elif unverified:
+        outcome = ("skipped", "insufficient_visual_evidence")
+    elif event.get("score", round(score, 6)) < rule["score_threshold"]:
         outcome = ("rejected", "score_below_threshold")
     else:
         outcome = ("selected", "visual_attributes_match")
@@ -97,10 +99,10 @@ def check(structure: dict, artifact: dict) -> list[str]:
                 )
         elif event["status"] not in expected["status_in"] or event["reason"] not in expected["reason_in"]:
             errors.append(f"event {index}: {event['status']}/{event['reason']} is not allowed")
-        else:
-            matching = roi["visualAttrs_info"]["matching"][event["query_id"]]
+        matching = ((roi.get("visualAttrs_info") or {}).get("matching") or {}).get(event.get("query_id"))
+        if matching is not None:
             score, outcome = expected_outcome(rule, event, matching)
-            if abs(score - event["score"]) > rule["score_tolerance"]:
+            if "score" in event and abs(score - event["score"]) > rule["score_tolerance"]:
                 errors.append(f"event {index}: score {event['score']} differs from recomputed {score}")
             if (event["status"], event["reason"]) != outcome:
                 errors.append(

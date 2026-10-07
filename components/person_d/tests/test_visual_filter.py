@@ -134,14 +134,25 @@ class NativeVisualFilterTests(unittest.TestCase):
                 key = (roi["roi_id"], event["dx_pair_id"], event.get("query_id"))
                 self.assertNotIn(key, decisions)
                 decisions[key] = event
-        he_selected = decisions[("case-001-case-001-he-roi-001", "case-001-dx-001", "case-001-query-001")]
-        self.assertEqual(("selected", "visual_attributes_match"), (he_selected["status"], he_selected["reason"]))
-        he_rejected = decisions[("case-001-case-001-he-roi-002", "case-001-dx-002", "case-001-query-002")]
-        self.assertEqual(("rejected", "must_condition_failed"), (he_rejected["status"], he_rejected["reason"]))
-        unmapped = decisions[("case-001-case-001-he-roi-002", "case-001-dx-002", "case-001-query-003")]
-        self.assertEqual(("skipped", "query_unmapped"), (unmapped["status"], unmapped["reason"]))
-        er_skipped = decisions[("case-001-case-001-er-roi-001", "case-001-dx-001", None)]
-        self.assertEqual(("skipped", "stain_not_in_reference_wsi"), (er_skipped["status"], er_skipped["reason"]))
+        def outcome(roi: str, dx: str, query: str) -> tuple[str, str]:
+            event = decisions[(f"case-001-case-001-{roi}", f"case-001-dx-{dx}", f"case-001-query-{query}")]
+            return event["status"], event["reason"]
+
+        # query-001 carries Must_True options on attributes the backend never extracts.
+        self.assertEqual(("skipped", "insufficient_visual_evidence"), outcome("he-roi-001", "001", "001"))
+        self.assertFalse(
+            decisions[("case-001-case-001-he-roi-001", "case-001-dx-001", "case-001-query-001")]["selected"]
+        )
+        self.assertEqual(("rejected", "must_condition_failed"), outcome("he-roi-002", "002", "002"))
+        self.assertEqual(("skipped", "query_unmapped"), outcome("he-roi-002", "002", "003"))
+        for roi in ("he-roi-001", "he-roi-002"):
+            self.assertEqual(("selected", "visual_attributes_match"), outcome(roi, "001", "004"))
+            self.assertEqual(("rejected", "score_below_threshold"), outcome(roi, "001", "005"))
+        self.assertEqual(("skipped", "stain_not_in_reference_wsi"), outcome("er-roi-001", "001", "001"))
+        # Every pair in the example has queries, so every event is query-level.
+        self.assertTrue(
+            all(event.get("query_id") and event.get("criteria_status") for event in decisions.values())
+        )
 
         payload = artifact["payload"]
         self.assertTrue(payload["reference_versions"]["visual_attribute_extraction"]["models_loaded"])
@@ -149,6 +160,36 @@ class NativeVisualFilterTests(unittest.TestCase):
             "1.2.1",
             payload["reference_versions"]["visual_matching_filter"]["label_map"]["criteria_version"],
         )
+
+    def test_pair_without_queries_gets_one_pair_level_event(self) -> None:
+        g = copy.deepcopy(self.g)
+        records = g["payload"]["case_list"][0]["structured_report"]["DxItems"]
+        records["Microcalcification"]["visualAttrQueries"] = []
+        extractor = _FakeExtractor(
+            {
+                "case-001-case-001-he-roi-001": POSITIVE,
+                "case-001-case-001-he-roi-002": NEGATIVE,
+            }
+        )
+        artifact, _ = self._build(extractor, g=g)
+        validate_artifact(artifact, "H.MatchedROIs")
+        for stain, roi in iter_rois(artifact["payload"]):
+            pair_events = [
+                event
+                for event in roi["selection_history"][1:]
+                if event["dx_pair_id"] == "case-001-dx-002"
+            ]
+            self.assertEqual(1, len(pair_events))
+            self.assertNotIn("query_id", pair_events[0])
+            expected = "no_visual_attr_query" if stain["stain_id"] == "case-001-he" else "stain_not_in_reference_wsi"
+            self.assertEqual(("skipped", expected), (pair_events[0]["status"], pair_events[0]["reason"]))
+            query_events = [
+                event
+                for event in roi["selection_history"][1:]
+                if event["dx_pair_id"] == "case-001-dx-001"
+            ]
+            self.assertEqual(3, len(query_events))
+            self.assertTrue(all("query_id" in event for event in query_events))
 
     def test_unmapped_query_is_skipped_without_loading_models(self) -> None:
         g = copy.deepcopy(self.g)

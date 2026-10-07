@@ -212,25 +212,11 @@ def build_native_artifact(
                 for record in records.values():
                     dx_pair_id = record["dx_pair_id"]
                     queries = record.get("visualAttrQueries", [])
-                    if stain["stain_id"] not in record["referenceWSI"]:
-                        events.append(
-                            _event(
-                                producer,
-                                "skipped",
-                                "stain_not_in_reference_wsi",
-                                dx_pair_id=dx_pair_id,
-                            )
-                        )
-                        continue
+                    is_reference = stain["stain_id"] in record["referenceWSI"]
                     if not queries:
-                        events.append(
-                            _event(
-                                producer,
-                                "skipped",
-                                "no_visual_attr_query",
-                                dx_pair_id=dx_pair_id,
-                            )
-                        )
+                        # Pair-level event: the pair has no query to link to.
+                        reason = "no_visual_attr_query" if is_reference else "stain_not_in_reference_wsi"
+                        events.append(_event(producer, "skipped", reason, dx_pair_id=dx_pair_id))
                         continue
                     for query in queries:
                         linkage = {
@@ -238,6 +224,11 @@ def build_native_artifact(
                             "query_id": query["query_id"],
                             "criteria_status": query["criteria_status"],
                         }
+                        if not is_reference:
+                            events.append(
+                                _event(producer, "skipped", "stain_not_in_reference_wsi", **linkage)
+                            )
+                            continue
                         if query["criteria_status"] != "mapped" or not query["diagnosticCriteria"]:
                             events.append(
                                 _event(producer, "skipped", "query_unmapped", **linkage)

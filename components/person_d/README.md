@@ -5,8 +5,18 @@ Owner: person_D. Component version `0.2.0` (`component.yaml`, config `component_
 
 `visual_filter` consumes `E.ROIs@2.0` and `G.VisualAttributeQueries@2.0` and writes
 `H.MatchedROIs@2.0` (schemas in `contracts/schemas/`). Every E ROI is kept with its upstream
-`selection_history`; one `visual_attributes_matching_filter` event is appended per diagnostic pair
-and query.
+`selection_history`, and `visual_attributes_matching_filter` events are appended at a fixed
+granularity:
+
+| Level | When | Linkage fields | Reasons |
+|---|---|---|---|
+| Query | the diagnostic pair has queries: one event per query | `dx_pair_id`, `query_id`, `criteria_status` | matching result, `query_unmapped`, `stain_not_in_reference_wsi` |
+| Pair | the diagnostic pair has no query: one event for the pair | `dx_pair_id` | `no_visual_attr_query`, or `stain_not_in_reference_wsi` for a non-reference stain |
+| Case | the case has no diagnostic pair: one event per ROI | none | `no_diagnostic_pair` |
+
+Together with `case_id`, `stain_id` and `roi_id`, every query-level event therefore carries the full
+`case_id + stain_id + roi_id + dx_pair_id + query_id` audit key; pair- and case-level events exist
+only where no query exists to link to.
 
 | Mode | Config | Behavior |
 |---|---|---|
@@ -30,12 +40,23 @@ and query.
    `roi.visualAttrs_info.models`.
 3. **Visual Attribute Matching Filter** (`matching_filter.py`): agreed labels map to criteria options
    through `criteria_label_map.json`, then exact, then case-insensitive matching. An attribute is
-   evaluated when it maps to at least one informative condition. A Must_False option, or an evaluated
-   Must_True attribute without a Must_True option, gives `rejected` (`must_condition_failed`).
-   Otherwise the mean `condition_weights` score must be `>= score_threshold` for `selected`
-   (`visual_attributes_match`), else `rejected` (`score_below_threshold`). Fewer than
-   `min_evaluated_attributes` evaluated attributes gives `skipped` (`insufficient_visual_evidence`).
-   Per-attribute decisions are stored in `roi.visualAttrs_info.matching.<query_id>`.
+   evaluated when it maps to at least one informative condition. The decision is taken in this order:
+   1. fewer than `min_evaluated_attributes` evaluated attributes: `skipped` (`insufficient_visual_evidence`);
+   2. a Must_False option, or an evaluated Must_True attribute without a Must_True option: `rejected`
+      (`must_condition_failed`);
+   3. an attribute with a Must_True option that was not evaluated (not extracted, models disagree,
+      unmapped or ambiguous label): the Must_True condition is unverified and never counts as
+      passed. With `unverified_must_true: skip` (default) the query is `skipped`
+      (`insufficient_visual_evidence`); with `reject` it is `rejected` (`must_condition_failed`).
+      This is checked before the score because a verified Must_True attribute would add to it;
+   4. the mean `condition_weights` score `>= score_threshold`: `selected` (`visual_attributes_match`),
+      otherwise `rejected` (`score_below_threshold`).
+
+   `selected` therefore requires every Must_True attribute of the criteria to be evaluated and
+   satisfied. `must_true_passed` is `false` whenever a Must_True attribute failed or is unverified.
+   Per-attribute decisions, `evaluated_count` and the `must_true_unverified` attribute list are
+   stored in `roi.visualAttrs_info.matching.<query_id>`, so the two `insufficient_visual_evidence`
+   causes (too few evaluated attributes, unverified Must_True) stay distinguishable.
 
 Other `skipped` reasons: `stain_not_in_reference_wsi`, `no_visual_attr_query`, `query_unmapped`,
 `no_diagnostic_pair`. Models load only when at least one reference-WSI ROI has a mapped query.
@@ -50,7 +71,7 @@ Other `skipped` reasons: `stain_not_in_reference_wsi`, `no_visual_attr_query`, `
 | GPU | Expected for `device: cuda`; one GPU. A CUDA device fails when CUDA is unavailable. |
 | CPU fallback | Supported with `device: cpu`. Canonical example in the image: 373 s, peak resident set 2.95 GiB, same decisions and scores as the GPU run (Docker Desktop VM, 12 vCPU, 7 GB, same host). Per-ROI CPU latency not measured. |
 | Batch size | One image per forward pass for ROIs and example images; not configurable |
-| Minimum VRAM | Not determined below 8 GB; the measured peak below is the known requirement |
+| Minimum VRAM | Verified on 8 GB; lower capacity not validated (measured peak below: 2.31 GiB reserved) |
 | Measured GPU memory | Peak `torch.cuda.max_memory_allocated` 2.11 GiB (reserved 2.31 GiB) |
 | Measured RAM | Peak resident set 3.2 GiB |
 | Measured time | About 97 s for the canonical example, dominated by model loading and example-prototype encoding; about 0.1 s per 1024 × 1024 ROI |
@@ -127,6 +148,35 @@ PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -v
 `test_visual_filter.py` writes a temporary label map below `reference/person_d/template_ref/`, so
 that directory must be writable when the tests run.
 
+## Integration with person_c (#1)
+
+Run against PR #1 at commit `0ad461d` (not merged yet):
+
+- **E**: produced by #1's own `build_region_artifact` from its canonical inputs
+  (`case_list.valid.json`, `proposals.valid.json`, the test's `EXAMPLE_CONFIG`); identical to #1's
+  `E_rois.expected.json` and used unchanged. Case `example-c-001`: an HE stain with 4 ROIs (level-0
+  MPP 0.25; main MPP 0.5, or 2.44140625 for the 20000 × 12000 px ROI so that its longest side is
+  2048 px) and an IHC stain without ROIs; `filepath` is the absolute `/example/example-he.svs`.
+- **G**: a fixture for the same case: #1's case-list metadata, one pair `Example_Diagnostic_Item`
+  with queries 001, 004 and 005 from `examples/G_queries.valid.json`, `referenceWSI` = the HE stain.
+- **WSI**: a synthetic pyramidal generic tiled TIFF (30000 × 20000 px, levels 1/4/16, MPP 0.25)
+  with tissue-like texture inside the four ROI boxes, mounted read-only at `/example/example-he.svs`.
+- **Run**: image `wlw/person-d:0.2.0`, UID 1000, GPU, `configs/native.example.json`; about 2 min.
+
+Results:
+
+- Every ROI passes the `roi_wh` / MPP check and is read at exactly `main_info.roi_wh` (800 × 550,
+  1500 × 1300, 2048 × 1229, 500 × 500); the large ROI is read from the 4× level in 0.86 s.
+- H validates. ROI ids and order, the upstream `selection_history`, `level0_info`, `main_info` and
+  `filepath` are unchanged; the IHC stain is kept with `roi_num` 0.
+- 12 query-level events, each with the full `case_id + stain_id + roi_id + dx_pair_id + query_id`
+  key. On all four ROIs: query 001 `skipped` (`insufficient_visual_evidence`, 3 unverified
+  Must_True attributes), 004 `selected`, 005
+  `rejected` (`score_below_threshold`), with 5 to 8 evaluated attributes per ROI; all follow the
+  `score_rule` of `examples/check_native_structure.py`.
+- OpenSlide 3.4.1 in the image does not report an MPP for a generic TIFF; person_d uses the MPPs
+  in E, so this does not affect the result.
+
 ## Failure conditions
 
 The process exits non-zero and writes no H when: E/G `case_id`, `data_mode`, or stain sets differ;
@@ -140,8 +190,11 @@ from the label map; or model inference fails.
 
 - The vocabulary covers 17 of the 24 diagnosticCriteria 1.2.1 attributes. `Tumour_Border`,
   `Myoepithelial_Cell_Layer`, `Stromal_Characteristics`, `Cytoplasmic_Features`, `Mitotic_Activity`,
-  `Squamous_Sebaceous_Differentiation`, and `Tumour_Infiltrating_Lymphocytes` are never evaluated;
-  with `unverified_must_true: ignore`, their Must_True options are not enforced.
+  `Squamous_Sebaceous_Differentiation`, and `Tumour_Infiltrating_Lymphocytes` are never evaluated.
+  A query whose criteria give one of them a Must_True option can therefore not be `selected`; unless a
+  verified condition rejects it, it is `skipped` (`insufficient_visual_evidence`). This applies to the
+  Histologic_Type and Microcalcification criteria of the canonical example. Because CLEE (person_e)
+  only takes ROIs with a `selected` event, such criteria currently give CLEE no eligible ROI.
 - `Cuboidal/Columnar` maps to criteria options with different conditions and is treated as ambiguous;
   `Pattern` `one to several layers` has no criteria option and is unmapped.
 - 14 vocabulary options have no example images and receive no prototype score.
@@ -152,12 +205,14 @@ from the label map; or model inference fails.
   `1.2.1` fail.
 - The CONCH release does not include the CoCa `text_decoder`; it is unused because only the image
   and text encoders are called.
-- The native path has been run end to end with the official PLIP and CONCH checkpoints on the
-  synthetic slide only; it has not been validated on real slides.
+- The native path has been run end to end with the official PLIP and CONCH checkpoints on synthetic
+  slides only (the canonical example and the person_c integration); it has not been validated on real
+  slides.
 
 ## Changelog
 
 - `0.2.0`: native PLIP + CONCH extraction and matching filter, weight SHA-256 checks, smoke config,
-  native canonical example with a synthetic slide; `example` mode unchanged except for the version
-  string.
+  native canonical example with a synthetic slide; an unverified Must_True is never `selected`
+  (`unverified_must_true: skip` by default); one event per query; `example` mode unchanged except for
+  the version string.
 - `0.1.0`: contract-only example stub.

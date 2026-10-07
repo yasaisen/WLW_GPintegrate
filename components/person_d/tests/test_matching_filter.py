@@ -33,7 +33,14 @@ SETTINGS = {
     },
     "score_threshold": 0.0,
     "min_evaluated_attributes": 1,
-    "unverified_must_true": "ignore",
+    "unverified_must_true": "skip",
+}
+SUPPORTING = {
+    "Cellular_and_Nuclear": {
+        "Cytological_Atypia": ["High-grade/Severe"],
+        "Chromatin": ["Hyperchromatic"],
+        "Cell_Pleomorphism": ["Moderate"],
+    }
 }
 
 
@@ -41,6 +48,19 @@ def histologic_criteria() -> dict:
     g = json.loads((EXAMPLES / "G_queries.valid.json").read_text(encoding="utf-8"))
     record = g["payload"]["case_list"][0]["structured_report"]["DxItems"]["Histologic_Type"]
     return record["visualAttrQueries"][0]["diagnosticCriteria"]
+
+
+def without_must_true(criteria: dict) -> dict:
+    """The same criteria with every Must_True option relaxed to High_Possibly_True."""
+
+    relaxed = copy.deepcopy(criteria)
+    for category in relaxed["visualAttrs"].values():
+        for spec in category.values():
+            spec["conditions"] = {
+                option: "High_Possibly_True" if condition == "Must_True" else condition
+                for option, condition in spec["conditions"].items()
+            }
+    return relaxed
 
 
 class MatchingFilterTests(unittest.TestCase):
@@ -74,21 +94,20 @@ class MatchingFilterTests(unittest.TestCase):
 
     def test_supporting_labels_are_selected(self) -> None:
         result = match_query(
-            {
-                "Cellular_and_Nuclear": {
-                    "Cytological_Atypia": ["High-grade/Severe"],
-                    "Chromatin": ["Hyperchromatic"],
-                    "Cell_Pleomorphism": ["Moderate"],
-                }
-            },
-            self.criteria,
-            self.label_map,
-            self.settings,
+            SUPPORTING, without_must_true(self.criteria), self.label_map, self.settings
         )
         self.assertEqual(("selected", "visual_attributes_match"), (result["status"], result["reason"]))
         self.assertEqual(1.0, result["score"])
         self.assertEqual(3, result["evaluated_count"])
         self.assertIn("Cellular_and_Nuclear.Chromatin", result["matched_attributes"])
+        self.assertEqual([], result["must_true_unverified"])
+        self.assertTrue(result["must_true_passed"])
+
+    def test_unverified_must_true_is_never_selected(self) -> None:
+        result = match_query(SUPPORTING, self.criteria, self.label_map, self.settings)
+        self.assertEqual(("skipped", "insufficient_visual_evidence"), (result["status"], result["reason"]))
+        self.assertEqual(3, result["evaluated_count"])
+        self.assertFalse(result["must_true_passed"])
         self.assertEqual(
             [
                 "Architecture.Myoepithelial_Cell_Layer",
@@ -97,6 +116,16 @@ class MatchingFilterTests(unittest.TestCase):
             ],
             result["must_true_unverified"],
         )
+
+    def test_unverified_must_true_is_checked_before_the_score(self) -> None:
+        result = match_query(
+            {"Cellular_and_Nuclear": {"Chromatin": ["Hyperchromatic"], "Cell_Pleomorphism": ["Monomorphic"]}},
+            self.criteria,
+            self.label_map,
+            MatchingSettings.from_config({**SETTINGS, "score_threshold": 0.5}),
+        )
+        self.assertEqual(("skipped", "insufficient_visual_evidence"), (result["status"], result["reason"]))
+        self.assertTrue(result["must_true_unverified"])
 
     def test_must_false_option_rejects(self) -> None:
         result = match_query(
@@ -146,7 +175,7 @@ class MatchingFilterTests(unittest.TestCase):
                     "Cell_Pleomorphism": ["Monomorphic"],
                 }
             },
-            self.criteria,
+            without_must_true(self.criteria),
             self.label_map,
             settings,
         )
@@ -175,6 +204,7 @@ class MatchingFilterTests(unittest.TestCase):
         for broken in (
             {**SETTINGS, "score_threshold": 1.5},
             {**SETTINGS, "unverified_must_true": "maybe"},
+            {**SETTINGS, "unverified_must_true": "ignore"},
             {**SETTINGS, "min_evaluated_attributes": 0},
             {**SETTINGS, "condition_weights": {"Must_True": 2.0}},
         ):

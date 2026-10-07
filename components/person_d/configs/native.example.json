@@ -37,6 +37,6 @@
     },
     "score_threshold": 0.0,
     "min_evaluated_attributes": 1,
-    "unverified_must_true": "ignore"
+    "unverified_must_true": "skip"
   }
 }

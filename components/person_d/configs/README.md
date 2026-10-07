@@ -35,4 +35,4 @@ python -c "import json, torch; from pathlib import Path; from conch.open_clip_cu
 | `matching.condition_weights` | Weight in [-1, 1] for each informative condition: `Must_True`, `High_Possibly_True`, `Low_Possibly_True`, `Must_False`. |
 | `matching.score_threshold` | Selected requires `score >= score_threshold`, within [-1, 1]. |
 | `matching.min_evaluated_attributes` | Fewer evaluated attributes yields `skipped` with `insufficient_visual_evidence`. |
-| `matching.unverified_must_true` | `ignore` or `reject` when an attribute with a Must_True option cannot be evaluated. |
+| `matching.unverified_must_true` | What happens when an attribute with a Must_True option cannot be evaluated: `skip` gives `skipped` / `insufficient_visual_evidence`, `reject` gives `rejected` / `must_condition_failed`. Either way the query is never `selected`. |

@@ -5,9 +5,12 @@ Compares the PLIP/CONCH-consistent labels of one ROI with one G
 
 An attribute is evaluated only when both models agree, its labels map to
 criteria options, and at least one mapped condition is informative.  A
-Must_False option or a missed Must_True option rejects the ROI; otherwise the
-mean condition weight must reach the configured threshold.  Too few evaluated
-attributes is insufficient evidence and yields skipped.
+Must_False option or a missed Must_True option rejects the ROI.  A Must_True
+attribute that was not evaluated is unverified: it never counts as passed, so
+the ROI is skipped (or rejected under the ``reject`` policy) instead of being
+scored.  Otherwise the mean condition weight must reach the configured
+threshold.  Too few evaluated attributes is insufficient evidence and yields
+skipped.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ INFORMATIVE_CONDITIONS = frozenset(
     {"Must_True", "Must_False", "High_Possibly_True", "Low_Possibly_True"}
 )
 SUPPORTING_CONDITIONS = frozenset({"Must_True", "High_Possibly_True"})
-UNVERIFIED_MUST_TRUE_POLICIES = ("ignore", "reject")
+UNVERIFIED_MUST_TRUE_POLICIES = ("skip", "reject")
 
 
 @dataclass(frozen=True)
@@ -197,7 +200,7 @@ def match_query(
 
     reject_unverified = settings.unverified_must_true == "reject" and bool(must_true_unverified)
     must_false_passed = not must_false_failed
-    must_true_passed = not must_true_failed and not reject_unverified
+    must_true_passed = not must_true_failed and not must_true_unverified
     failed = sorted(
         set(must_false_failed)
         | set(must_true_failed)
@@ -209,10 +212,14 @@ def match_query(
         if SUPPORTING_CONDITIONS & set(result["conditions"])
     )
 
+    # An unverified Must_True could still add to the score, so it is checked
+    # before the threshold and never ends as selected.
     if len(evaluated) < settings.min_evaluated_attributes:
         status, reason = "skipped", "insufficient_visual_evidence"
-    elif not (must_false_passed and must_true_passed):
+    elif must_false_failed or must_true_failed or reject_unverified:
         status, reason = "rejected", "must_condition_failed"
+    elif must_true_unverified:
+        status, reason = "skipped", "insufficient_visual_evidence"
     elif score < settings.score_threshold:
         status, reason = "rejected", "score_below_threshold"
     else:
