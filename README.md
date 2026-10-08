@@ -4,9 +4,10 @@
 元件與外部資產；其他元件只依賴輸入／輸出 contract、程序 exit code 與檔案路徑，不直接 import
 別人的研究實作。
 
-目前 `person_a`～`person_d` 僅保留可跑通 contract 與 pipeline 的範例 stub，不包含研究方法、模型、
-checkpoint 或正式超參數；`person_e` 保留 CLEE 整合實作。stub 輸出只可用於介面測試，不得用於研究、
-診斷、效能評估或 benchmark。
+目前 `person_a`～`person_c` 僅保留可跑通 contract 與 pipeline 的範例 stub，不包含研究方法、模型、
+checkpoint 或正式超參數；`person_d` 提供 PLIP + CONCH visual attribute filter（`mode: native`，見
+`components/person_d/README.md`），其 `mode: example` 仍是 pipeline 使用的 contract stub；`person_e`
+保留 CLEE 整合實作。stub 輸出只可用於介面測試，不得用於研究、診斷、效能評估或 benchmark。
 
 ## 1. 框架與資料流
 
