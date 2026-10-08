@@ -1,6 +1,6 @@
 # Person A: Report Decompose and Query Generation
 
-Component version: `0.8.0`
+Component version: `0.9.0`
 
 This directory contains the Person A research implementation behind the shared
 single-case CLI. It preserves the central contracts and does not store reports,
@@ -26,8 +26,9 @@ Report Decompose. For the existing hospital Excel layout,
 - Histologic Type classification: `UDH`, `FEA`, `ADH`, `DCIS`, `IC`, `OTHER`,
   and `AMBIGUOUS`; other diagnostic results remain free text.
 - D preserves the source case, block, stain, WSI identity, and WSI filepath.
-- Query Generation supports reference mapping and the Nano5 learned soft-prompt
-  backend for Gemma.
+- Query Generation supports reference mapping and the Nano5 Stage 2 condition
+  soft-prompt for Gemma. The learned backend consumes three F chunks and
+  predicts one of six occurrence conditions for every canonical visual option.
 
 ## Runtime
 
@@ -37,6 +38,10 @@ Report Decompose. For the existing hospital Excel layout,
 - Report Decompose with MedGemma: one CUDA GPU; current tested target is at
   least 4 GB VRAM using NF4 4-bit loading and CPU offload.
 - Learnable Query Generation: one CUDA GPU plus mounted soft-prompt checkpoint.
+  The current Stage 2 checkpoint is a 64-token by 1152-dimension soft prompt,
+  selected at epoch 21. It was trained for `ADH`, `FEA`, `DCIS`, `IC`, and
+  `UDH`, with three retrieval conditions (3/0, 2/1, and 1/2 correct/wrong
+  chunks).
 
 The base models are downloaded from Hugging Face into `/run/cache/huggingface`.
 The token is read from `HF_TOKEN`; it is never stored in this repository.
@@ -47,13 +52,13 @@ The sibling directory is mounted read-only as `/reference`:
 
 ```text
 reference/person_a/
-├── checkpoint/soft_prompt_best.pt
+├── checkpoint/soft_prompt_stage2_64SP_50epoch_chunk_option_conditions_retrieval_mixed_best.pt
 └── template_ref/
     ├── DxStructuredCandidates_integrated.json
     ├── Histologic_Type_mappingTable.json
     ├── candidateReference.json
     ├── [typeLevel]visualAttrs_v1.2.1_2603241656.json
-    └── chunks_with_attribute.json
+    └── chunks_with_attribute_condition.json
 ```
 
 Exact revisions, SHA-256 values, licenses, and mount paths are recorded in
@@ -101,7 +106,7 @@ Build from the repository root:
 ```bash
 docker build --no-cache \
   -f components/person_a/Dockerfile \
-  -t wlw/person-a:0.8.0 .
+  -t wlw/person-a:0.9.0 .
 ```
 
 Run one CaseList case. The standard sibling mounts are read-only reference data
@@ -112,7 +117,7 @@ docker run --rm --gpus all \
   --env-file integration/.env \
   -v "$(pwd)/../reference:/reference:ro" \
   -v "$(pwd)/../run:/run" \
-  wlw/person-a:0.8.0 \
+  wlw/person-a:0.9.0 \
   --input /run/input/pipeline/case-001.json \
   --output /run/output/work/D_dx_pairs.json \
   --config /app/components/person_a/configs/report_decompose.default.json
@@ -144,6 +149,10 @@ valid; they simply do not produce that DxItem.
 
 ## Change log
 
+- `0.9.0`: replaced the old selected-value soft prompt with the Stage 2
+  option-condition model. It now writes the learned six-class condition for
+  every visual option and verifies that the mounted checkpoint and annotated
+  chunks were trained from the same reference data.
 - `0.8.0`: aligned with the sibling `reference/` and `run/` layout; changed
   Report Decompose from B batch input/D index output to single-case
   `CaseListInput@1.0`/`D.DxPairs@2.0`; kept B-to-CaseList as an explicit upstream

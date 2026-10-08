@@ -12,56 +12,40 @@ from contracts.metadata import dx_items, ensure_same_case
 from contracts.runtime import cli_parser, load_config, load_inputs, write_artifact
 
 
+CONDITION_LABELS = {
+    "Must_True",
+    "Must_False",
+    "High_Possibly_True",
+    "Low_Possibly_True",
+    "Negligible",
+    "Not_Mentioned",
+}
+
+
 def _merge_learned_attributes(
     criteria: dict[str, Any],
     generated: dict[str, Any],
-    backend_config: dict[str, Any],
 ) -> dict[str, Any]:
-    """Translate generated values into the condition format consumed by Person D.
-
-    The Nano5 target contains selected values (or ``Not_Mentioned``), while G's
-    diagnostic criteria contains one condition for every controlled-vocabulary
-    option.  This conversion is explicit and configurable instead of silently
-    inventing fields in G.
-    """
+    """Copy the learned option-condition matrix into Person D's G format."""
 
     merged = deepcopy(criteria)
     visual_attrs = merged.get("visualAttrs")
     if not isinstance(visual_attrs, dict):
         raise ValueError("Mapped diagnosticCriteria has no visualAttrs object")
-    expected = {
-        (category, feature)
-        for category, features in visual_attrs.items()
-        for feature in features
-    }
-    actual = {
-        (category, feature)
-        for category, features in generated.items()
-        if isinstance(features, dict)
-        for feature in features
-    }
-    if actual != expected:
-        missing = sorted(expected - actual)
-        unexpected = sorted(actual - expected)
+    if set(generated) != set(visual_attrs):
         raise ValueError(
-            "Learned Attribute keys do not match G diagnostic criteria; "
-            f"missing={missing}, unexpected={unexpected}"
+            "Learned Attribute groups do not match G diagnostic criteria; "
+            f"expected={sorted(visual_attrs)}, actual={sorted(generated)}"
         )
-
-    merge_mode = str(backend_config.get("condition_merge_mode", "replace"))
-    if merge_mode not in {"replace", "overlay"}:
-        raise ValueError("condition_merge_mode must be replace or overlay")
-    selected_condition = str(
-        backend_config.get("selected_value_condition", "Must_True")
-    )
-    unselected_condition = str(
-        backend_config.get("unselected_value_condition", "Not_Mentioned")
-    )
 
     for category, features in visual_attrs.items():
         generated_features = generated.get(category)
-        if not isinstance(generated_features, dict):
-            raise ValueError(f"Generated Attribute category {category!r} is invalid")
+        if not isinstance(generated_features, dict) or set(generated_features) != set(
+            features
+        ):
+            raise ValueError(
+                f"Generated Attribute category {category!r} has different features"
+            )
         for feature, definition in features.items():
             if not isinstance(definition, dict):
                 raise ValueError(
@@ -73,31 +57,33 @@ def _merge_learned_attributes(
                 raise ValueError(
                     f"G visual attribute {category}.{feature} lacks options/conditions"
                 )
-            value = generated_features[feature]
-            if value == "Not_Mentioned":
-                selected: list[str] = []
-            elif isinstance(value, list) and value and all(
-                isinstance(item, str) for item in value
-            ):
-                selected = value
-            else:
+            generated_conditions = generated_features[feature]
+            if not isinstance(generated_conditions, dict):
                 raise ValueError(
-                    f"Generated {category}.{feature} must be Not_Mentioned "
-                    "or a non-empty string list"
+                    f"Generated {category}.{feature} must map every option "
+                    "to one condition"
                 )
-            illegal = sorted(set(selected) - set(options))
-            if illegal:
+            if set(generated_conditions) != set(options):
                 raise ValueError(
-                    f"Generated {category}.{feature} values are not present in "
-                    f"candidate options: {illegal}"
+                    f"Generated {category}.{feature} options do not match G; "
+                    f"expected={sorted(options)}, "
+                    f"actual={sorted(generated_conditions)}"
                 )
-            if merge_mode == "replace":
-                definition["conditions"] = {
-                    option: unselected_condition for option in options
+            illegal_conditions = sorted(
+                {
+                    repr(value)
+                    for value in generated_conditions.values()
+                    if not isinstance(value, str) or value not in CONDITION_LABELS
                 }
-                conditions = definition["conditions"]
-            for option in selected:
-                conditions[option] = selected_condition
+            )
+            if illegal_conditions:
+                raise ValueError(
+                    f"Generated {category}.{feature} has illegal conditions: "
+                    f"{illegal_conditions}"
+                )
+            definition["conditions"] = {
+                option: generated_conditions[option] for option in options
+            }
     return merged
 
 
@@ -200,22 +186,9 @@ def generate_artifact(
             criteria = _merge_learned_attributes(
                 criteria,
                 generated,
-                backend_config,
             )
             learnable_provenance = deepcopy(generator.provenance)
-            learnable_provenance.update(
-                {
-                    "condition_merge_mode": backend_config.get(
-                        "condition_merge_mode", "replace"
-                    ),
-                    "selected_value_condition": backend_config.get(
-                        "selected_value_condition", "Must_True"
-                    ),
-                    "unselected_value_condition": backend_config.get(
-                        "unselected_value_condition", "Not_Mentioned"
-                    ),
-                }
-            )
+            learnable_provenance["condition_merge_mode"] = "replace_all_options"
         evidence = " ".join(chunk["text"] for chunk in used_chunks)
         status = "mapped" if criteria is not None else "unmapped"
         mapping_source = (

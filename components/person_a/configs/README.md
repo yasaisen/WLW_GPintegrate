@@ -4,7 +4,8 @@
 - `report_decompose.default.json`: production report extraction. VGHTC uses Regex;
   CGMH uses Regex and invokes MedGemma according to the configured fallback rules.
 - `query_generation.default.json`: deterministic reference mapping to G.
-- `query_generation.learnable.json`: Gemma plus the trained soft-prompt checkpoint.
+- `query_generation.learnable.json`: Gemma plus the Stage 2 condition soft-prompt;
+  it predicts one of six condition labels for every canonical visual option.
 
 Production paths are logical sibling paths under `../reference/person_a/`. Runtime model
 downloads and caches belong under `../run/cache/`. Configs must not contain credentials,

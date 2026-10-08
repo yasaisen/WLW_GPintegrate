@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -27,10 +28,10 @@ class FakeLearnableGenerator:
             "backend": "learnable_soft_prompt",
             "model_name": "google/gemma-3-1b-it",
             "model_revision": None,
-            "checkpoint_name": "soft_prompt_best.pt",
+            "checkpoint_name": "soft_prompt_condition_best.pt",
             "checkpoint_sha256": "abc123",
             "attribute_reference": {
-                "source_name": "chunks_with_attribute.json",
+                "source_name": "chunks_with_attribute_condition.json",
                 "sha256": "def456",
             },
             "required_chunk_count": 3,
@@ -40,8 +41,14 @@ class FakeLearnableGenerator:
         self.calls.append((dx_text, [chunk["chunk_id"] for chunk in chunks]))
         return {
             "Cellular_and_Nuclear": {
-                "Cell_Pleomorphism": ["Monomorphic"],
-                "Polarity": "Not_Mentioned",
+                "Cell_Pleomorphism": {
+                    "Monomorphic": "Must_True",
+                    "Pleomorphic": "Not_Mentioned",
+                },
+                "Polarity": {
+                    "Maintained": "High_Possibly_True",
+                    "Lost": "Must_False",
+                },
             }
         }
 
@@ -250,9 +257,6 @@ class LearnableQueryGenerationTest(unittest.TestCase):
                 "backend": {
                     "mode": "learnable_soft_prompt",
                     "required_chunk_count": 3,
-                    "condition_merge_mode": "replace",
-                    "selected_value_condition": "Must_True",
-                    "unselected_value_condition": "Not_Mentioned",
                 },
             }
             generator = FakeLearnableGenerator()
@@ -285,7 +289,7 @@ class LearnableQueryGenerationTest(unittest.TestCase):
             conditions["Cell_Pleomorphism"]["conditions"],
         )
         self.assertEqual(
-            {"Maintained": "Not_Mentioned", "Lost": "Not_Mentioned"},
+            {"Maintained": "High_Possibly_True", "Lost": "Must_False"},
             conditions["Polarity"]["conditions"],
         )
         self.assertEqual(
@@ -315,24 +319,41 @@ class LearnableQueryGenerationTest(unittest.TestCase):
     def test_attribute_reference_and_strict_json_validation(self) -> None:
         attributes = {
             "Category": {
-                "Feature": ["Present"],
-                "Other": "Not_Mentioned",
+                "Feature": {
+                    "Present": "Must_True",
+                    "Absent": "Not_Mentioned",
+                },
+                "Other": {"Seen": "Low_Possibly_True"},
             }
         }
+        other_attributes = {
+            "Category": {
+                "Feature": {
+                    "Present": "Not_Mentioned",
+                    "Absent": "Must_True",
+                },
+                "Other": {"Seen": "Negligible"},
+            }
+        }
+
+        def reference_entry(text: str, attribute: dict) -> dict:
+            return {
+                "text": text,
+                "attribute": attribute,
+                "attribute_condition_metadata": {
+                    "target_format": "chunk_visual_attribute_option_conditions_v2",
+                    "typelevel_sha256": "a" * 64,
+                    "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                },
+            }
+
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "chunks.json"
             path.write_text(
                 json.dumps(
                     [
-                        {"attribute": attributes},
-                        {
-                            "attribute": {
-                                "Category": {
-                                    "Feature": ["Absent"],
-                                    "Other": ["Seen"],
-                                }
-                            }
-                        },
+                        reference_entry("first", attributes),
+                        reference_entry("second", other_attributes),
                     ]
                 ),
                 encoding="utf-8",
@@ -342,12 +363,28 @@ class LearnableQueryGenerationTest(unittest.TestCase):
         generated = parse_strict_json_object(json.dumps(attributes))
         validate_generated_attributes(generated, template, allowed)
         self.assertEqual(
-            {"Not_Mentioned", "Present", "Absent"},
-            allowed["Category.Feature"],
+            {
+                "Must_True",
+                "Must_False",
+                "High_Possibly_True",
+                "Low_Possibly_True",
+                "Negligible",
+                "Not_Mentioned",
+            },
+            allowed["Category.Feature.Present"],
         )
         self.assertEqual("chunks.json", provenance["source_name"])
+        self.assertEqual(
+            "chunk_visual_attribute_option_conditions_v2",
+            provenance["target_format"],
+        )
         with self.assertRaises(LearnableQueryGenerationError):
             parse_strict_json_object("```json\n{}\n```")
+
+        invalid = json.loads(json.dumps(attributes))
+        invalid["Category"]["Feature"]["Present"] = "Sometimes"
+        with self.assertRaises(LearnableQueryGenerationError):
+            validate_generated_attributes(invalid, template, allowed)
 
 
 if __name__ == "__main__":

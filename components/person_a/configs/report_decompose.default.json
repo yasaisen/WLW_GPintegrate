@@ -1,5 +1,5 @@
 {
-  "component_version": "person-a/report-decompose:0.8.0",
+  "component_version": "person-a/report-decompose:0.9.0",
   "dx_candidates_path": "../reference/person_a/template_ref/DxStructuredCandidates_integrated.json",
   "report_extraction": {
     "enabled": true,

@@ -7,30 +7,33 @@ assets:
     license: internal-research-use
     expected_mount_path: /reference/person_a/template_ref/DxStructuredCandidates_integrated.json
   - name: histologic-type-mapping
-    revision: 2026-03
-    sha256: 8d0318eb0f5d32744bbcd5a277a20aa1e5c48c28a3c24505ee8cbebef7f89b13
+    revision: stage2-condition-2026-10
+    sha256: c430e01da46d99463249e28de098d5e039998cf1e812cb9bbb70fc96d3281ae2
     license: internal-research-use
     expected_mount_path: /reference/person_a/template_ref/Histologic_Type_mappingTable.json
   - name: visual-attribute-candidates
-    revision: 2026-03
-    sha256: 420c4916e9113debbb9adeb2aeda00a253461aec10cf8b2e29aef4ce772cb206
+    revision: derived-from-stage2-condition-type-level-2026-10
+    sha256: 8ad1e14309200264ec4ec48f3948ab2490d9b3b111191f3aee2de13578d28f2d
     license: internal-research-use
     expected_mount_path: /reference/person_a/template_ref/candidateReference.json
+    note: Derived from the matching Stage 2 condition type-level option tree; Polarity retains the canonical ordinal type.
   - name: type-level-visual-attributes
-    revision: 1.2.1-2603241656
-    sha256: a119c04d59d59f3cb7dbfe2d4d71407987032ce496460aa3588394f7dbee9bd3
+    revision: 1.2.1-stage2-condition-2026-10
+    sha256: cee62d92732bb199ff1bf34b904802c758d5467fe9f5c879ee6d6944df209861
     license: internal-research-use
     expected_mount_path: /reference/person_a/template_ref/[typeLevel]visualAttrs_v1.2.1_2603241656.json
+    note: Its SHA-256 is the typelevel_sha256 embedded in the condition chunks and checkpoint.
   - name: learnable-query-attribute-vocabulary
-    revision: nano5-stage2-2026-09
-    sha256: c0f9664419c00b2c2f750415920b3486e797610a9bc0b12edf7671a33fae5690
+    revision: nano5-stage2-condition-2026-10
+    sha256: 1a5e205dd95f6cbb3209049879bbe0789d959dc562dc3076f435cc0cd688776f
     license: internal-research-use
-    expected_mount_path: /reference/person_a/template_ref/chunks_with_attribute.json
+    expected_mount_path: /reference/person_a/template_ref/chunks_with_attribute_condition.json
   - name: learnable-query-soft-prompt
-    revision: stage1-64sp-50epoch-best
-    sha256: c9d1eede26b2958614f465323acc1caa60864f45d137810980f712e9b33f6c7a
+    revision: stage2-64sp-50epoch-option-conditions-best
+    sha256: c6d528818e82ea2ac87dc16960aec703653e194ec827da7082311b938287e9a2
     license: internal-research-use
-    expected_mount_path: /reference/person_a/checkpoint/soft_prompt_best.pt
+    expected_mount_path: /reference/person_a/checkpoint/soft_prompt_stage2_64SP_50epoch_chunk_option_conditions_retrieval_mixed_best.pt
+    note: Gemma 3 1B, soft prompt shape 64x1152, selected at training epoch 21.
   - name: medgemma-report-extractor
     revision: 91850547d9f0b2fdd21aa7c5f4f3d1a8a52c243b
     sha256: null
@@ -39,9 +42,9 @@ assets:
     expected_cache_path: /run/cache/huggingface
     note: Multi-file Hub snapshot is pinned by revision; record a deployment export manifest when mirrored offline.
   - name: gemma-query-generator
-    revision: resolve-before-release
+    revision: dcc83ea841ab6100d6b47a070329e1ba4cf78752
     sha256: null
     license: gemma
     source: huggingface:google/gemma-3-1b-it
     expected_cache_path: /run/cache/huggingface
-    note: Pin the exact Hub revision and exported snapshot manifest before release acceptance.
+    note: Exact Hub revision used by the successful mounted Person B condition-generation validation.

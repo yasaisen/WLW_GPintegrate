@@ -1,4 +1,4 @@
-"""Gemma 3 soft-prompt inference backend for Person A query generation.
+"""Gemma 3 condition soft-prompt inference for Person A query generation.
 
 This module is the production inference boundary distilled from the Nano5
 training/evaluation programs.  It deliberately does not contain the training
@@ -18,6 +18,15 @@ from typing import Any
 from contracts.paths import resolve_person_reference_path
 
 SOFT_PROMPT_MARKER = "<SOFT_PROMPT_INSERT>"
+TARGET_FORMAT = "chunk_visual_attribute_option_conditions_v2"
+CONDITION_LABELS = {
+    "Must_True",
+    "Must_False",
+    "High_Possibly_True",
+    "Low_Possibly_True",
+    "Negligible",
+    "Not_Mentioned",
+}
 
 
 class LearnableQueryGenerationError(ValueError):
@@ -53,19 +62,10 @@ def _node_types(document: dict[str, Any], prefix: str = "") -> dict[str, str]:
     return types
 
 
-def _add_allowed_values(destination: set[str], value: Any) -> None:
-    if value is None or value == "Not_Mentioned":
-        destination.add("Not_Mentioned")
-    elif isinstance(value, list):
-        destination.update(item for item in value if isinstance(item, str))
-    elif isinstance(value, str):
-        destination.add(value)
-
-
 def load_attribute_reference(
     path: str | Path,
 ) -> tuple[dict[str, Any], dict[str, set[str]], dict[str, str]]:
-    """Load the training attribute schema and its legal leaf vocabulary."""
+    """Load and validate the condition-annotated Stage 2 chunk reference."""
 
     source = Path(path)
     if not source.is_file():
@@ -77,35 +77,70 @@ def load_attribute_reference(
             "Attribute reference must be a non-empty JSON array"
         )
 
-    attributes = [
-        item.get("attribute")
-        for item in chunks
-        if isinstance(item, dict) and isinstance(item.get("attribute"), dict)
-    ]
-    if not attributes:
-        raise LearnableQueryGenerationError(
-            "Attribute reference contains no attribute objects"
-        )
+    attributes: list[dict[str, Any]] = []
+    typelevel_sha256: str | None = None
+    for index, item in enumerate(chunks):
+        if not isinstance(item, dict) or not isinstance(item.get("attribute"), dict):
+            raise LearnableQueryGenerationError(
+                f"Attribute reference entry {index} has no attribute object"
+            )
+        metadata = item.get("attribute_condition_metadata")
+        if not isinstance(metadata, dict):
+            raise LearnableQueryGenerationError(
+                f"Attribute reference entry {index} lacks condition metadata"
+            )
+        if metadata.get("target_format") != TARGET_FORMAT:
+            raise LearnableQueryGenerationError(
+                f"Attribute reference entry {index} is not {TARGET_FORMAT}"
+            )
+        entry_typelevel_sha256 = metadata.get("typelevel_sha256")
+        if not isinstance(entry_typelevel_sha256, str) or len(entry_typelevel_sha256) != 64:
+            raise LearnableQueryGenerationError(
+                f"Attribute reference entry {index} has invalid typelevel_sha256"
+            )
+        if typelevel_sha256 is None:
+            typelevel_sha256 = entry_typelevel_sha256
+        elif entry_typelevel_sha256 != typelevel_sha256:
+            raise LearnableQueryGenerationError(
+                "Attribute reference mixes different type-level revisions"
+            )
+        text = str(item.get("text", ""))
+        if metadata.get("text_sha256") != hashlib.sha256(text.encode("utf-8")).hexdigest():
+            raise LearnableQueryGenerationError(
+                f"Attribute reference entry {index} text hash does not match"
+            )
+        attributes.append(item["attribute"])
 
     template = deepcopy(attributes[0])
     expected_nodes = _node_types(template)
-    for index, attribute in enumerate(attributes[1:], start=1):
+    for index, attribute in enumerate(attributes):
         if _node_types(attribute) != expected_nodes:
             raise LearnableQueryGenerationError(
                 f"Attribute schema differs in reference entry {index}"
             )
 
-    allowed = {
-        leaf_path: {"Not_Mentioned"}
-        for leaf_path in _flatten(template)
-    }
-    for attribute in attributes:
+    allowed = {leaf_path: set(CONDITION_LABELS) for leaf_path in _flatten(template)}
+    for index, attribute in enumerate(attributes):
         for leaf_path, value in _flatten(attribute).items():
-            _add_allowed_values(allowed[leaf_path], value)
+            if not isinstance(value, str) or value not in CONDITION_LABELS:
+                raise LearnableQueryGenerationError(
+                    f"Attribute reference entry {index} has illegal condition "
+                    f"at {leaf_path}: {value!r}"
+                )
+
+    canonical_chunks = json.dumps(
+        chunks,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
     return template, allowed, {
         "source_name": source.name,
         "sha256": hashlib.sha256(raw).hexdigest(),
+        "target_format": TARGET_FORMAT,
+        "typelevel_sha256": str(typelevel_sha256),
+        "chunk_data_sha256": hashlib.sha256(canonical_chunks).hexdigest(),
     }
 
 
@@ -153,19 +188,10 @@ def validate_generated_attributes(
 
     errors: list[str] = []
     for path, value in _flatten(generated).items():
-        if value == "Not_Mentioned":
-            continue
-        if not isinstance(value, list) or not value:
-            errors.append(f"{path}: expected Not_Mentioned or a non-empty list")
-            continue
-        if any(not isinstance(item, str) for item in value):
-            errors.append(f"{path}: list contains a non-string value")
-            continue
-        if len(value) != len(set(value)):
-            errors.append(f"{path}: duplicate values are not allowed")
-        illegal = sorted(set(value) - allowed_values[path])
-        if illegal:
-            errors.append(f"{path}: values outside training vocabulary {illegal}")
+        if not isinstance(value, str) or value not in allowed_values[path]:
+            errors.append(
+                f"{path}: expected exactly one legal condition string, got {value!r}"
+            )
     if errors:
         raise LearnableQueryGenerationError(
             "Generated Attribute values are invalid: " + "; ".join(errors)
@@ -187,18 +213,23 @@ def _chunk_text(chunks: list[dict[str, Any]]) -> str:
 
 
 def _user_text(dx_text: str, chunks: list[dict[str, Any]]) -> str:
-    """Keep this prompt byte-for-byte aligned with Nano5 training."""
+    """Keep this prompt byte-for-byte aligned with condition-model training."""
 
     return (
         f"DxText:\n{dx_text}\n\n"
         f"ChunkText:\n{_chunk_text(chunks)}\n\n"
         f"Task:\n"
-        f"Generate the Attribute JSON from DxText and ChunkText.\n"
-        f"Some retrieved chunks may be unrelated to DxText.\n"
-        f"Use only the chunks relevant to DxText and ignore unrelated chunks.\n"
-        f"Return the Attribute JSON object only.\n"
-        f"Use the same nested Attribute schema learned during training.\n"
-        f"Do not add markdown, explanation, or extra text.\n"
+        f"Generate the visual attribute condition JSON from DxText and the relevant retrieved chunks.\n"
+        f"Some retrieved chunks may be unrelated to DxText. Use relevant chunks and ignore unrelated chunks.\n"
+        f"For every canonical attribute, include ALL canonical options, each mapped to exactly one condition string.\n"
+        f"Allowed conditions: Must_True, Must_False, High_Possibly_True, Low_Possibly_True, Negligible, Not_Mentioned.\n"
+        f"For options supported by the relevant chunks, output the subtype-specific condition learned during training.\n"
+        f"Predict qualitative occurrence likelihood categories, not merely which options are mentioned.\n"
+        f"For options not supported by the relevant chunks, output Not_Mentioned.\n"
+        f"Merge evidence across relevant chunks; unrelated chunks must never supply attribute conditions.\n"
+        f"Condition labels describe subtype-level occurrence rules, not observations in this patient's tissue.\n"
+        f"Use the canonical nested group/attribute/option schema learned during training.\n"
+        f"Return the JSON object only, with no markdown, explanation, metadata, options list, or type fields.\n"
         f"Start directly with {{.\n\n"
         f"Attribute:\n{SOFT_PROMPT_MARKER}"
     )
@@ -244,6 +275,7 @@ class LearnableSoftPromptGenerator:
             "checkpoint_sha256": _sha256(self.checkpoint_path),
             "attribute_reference": reference_provenance,
             "required_chunk_count": self.required_chunk_count,
+            "target_format": TARGET_FORMAT,
         }
         self._torch: Any = None
         self._tokenizer: Any = None
@@ -323,6 +355,36 @@ class LearnableSoftPromptGenerator:
             raise LearnableQueryGenerationError(
                 f"Checkpoint model {checkpoint_model!r} does not match "
                 f"configured model {self.model_name!r}"
+            )
+        if checkpoint.get("target_format") != TARGET_FORMAT:
+            raise LearnableQueryGenerationError(
+                "Checkpoint target_format does not match the condition backend"
+            )
+        if (
+            checkpoint.get("typelevel_sha256")
+            != self.provenance["attribute_reference"]["typelevel_sha256"]
+        ):
+            raise LearnableQueryGenerationError(
+                "Checkpoint and condition reference use different type-level data"
+            )
+        if (
+            checkpoint.get("chunk_data_sha256")
+            != self.provenance["attribute_reference"]["chunk_data_sha256"]
+        ):
+            raise LearnableQueryGenerationError(
+                "Checkpoint and condition reference use different annotated chunks"
+            )
+        checkpoint_conditions = checkpoint.get("condition_labels")
+        if checkpoint_conditions is not None and set(checkpoint_conditions) != CONDITION_LABELS:
+            raise LearnableQueryGenerationError(
+                "Checkpoint condition labels do not match the runtime vocabulary"
+            )
+        checkpoint_template = checkpoint.get("canonical_attribute_template")
+        if isinstance(checkpoint_template, dict) and _node_types(checkpoint_template) != _node_types(
+            self.attribute_template
+        ):
+            raise LearnableQueryGenerationError(
+                "Checkpoint canonical attribute schema does not match the condition reference"
             )
         embedding_size = model.get_input_embeddings().embedding_dim
         if soft_prompt.shape[1] != embedding_size:
