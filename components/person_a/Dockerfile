@@ -25,6 +25,7 @@ RUN python -m pip install --no-cache-dir --disable-pip-version-check \
 COPY components/person_a/requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir --disable-pip-version-check \
     --retries 10 --timeout 120 \
+    --index-url https://pypi.org/simple \
     -r /tmp/requirements.txt
 
 COPY contracts /app/contracts
