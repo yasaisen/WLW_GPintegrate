@@ -24,10 +24,23 @@ RUN python -m pip install --no-cache-dir --disable-pip-version-check \
 
 COPY components/person_a/requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install --disable-pip-version-check \
+    grep -v '^bitsandbytes==' /tmp/requirements.txt > /tmp/requirements-runtime.txt \
+    && python -m pip install --disable-pip-version-check \
     --retries 20 --timeout 600 --prefer-binary \
     --index-url https://pypi.org/simple \
-    -r /tmp/requirements.txt
+    -r /tmp/requirements-runtime.txt
+
+# Keep the 41 MB native wheel separate so a transient or corrupted transfer
+# can be retried without downloading every other runtime dependency again.
+RUN for attempt in 1 2 3; do \
+        python -m pip install --no-cache-dir --disable-pip-version-check \
+            --retries 20 --timeout 600 --prefer-binary --no-deps \
+            --index-url https://pypi.org/simple \
+            bitsandbytes==0.50.1 \
+        && exit 0; \
+        echo "bitsandbytes install failed (attempt ${attempt}/3); retrying"; \
+    done; \
+    exit 1
 
 COPY contracts /app/contracts
 COPY components/person_a /app/components/person_a
