@@ -14,27 +14,42 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
+# Modern pip resumes interrupted HTTP downloads instead of restarting large
+# CUDA wheels from byte zero.  Pin it so Docker builds remain reproducible.
+RUN --mount=type=cache,id=person-a-pip-bootstrap,target=/root/.cache/pip \
+    python -m pip install --disable-pip-version-check \
+    --retries 20 --timeout 600 \
+    --index-url https://pypi.org/simple \
+    pip==26.2.1
+
 # CUDA userspace comes from the pinned PyTorch wheel. The host supplies only
 # the NVIDIA driver and Container Toolkit.
-RUN python -m pip install --no-cache-dir --disable-pip-version-check \
-    --retries 10 --timeout 120 \
-    torch==2.6.0 torchvision==0.21.0 \
-    --index-url https://download.pytorch.org/whl/cu124 \
-    --extra-index-url https://pypi.org/simple
+RUN --mount=type=cache,id=person-a-pytorch-cu124,target=/root/.cache/pip \
+    for attempt in 1 2 3; do \
+        python -m pip install --disable-pip-version-check \
+            --retries 20 --timeout 600 --resume-retries 20 \
+            torch==2.6.0 torchvision==0.21.0 \
+            --index-url https://download.pytorch.org/whl/cu124 \
+            --extra-index-url https://pypi.org/simple \
+        && exit 0; \
+        echo "PyTorch install failed (attempt ${attempt}/3); resuming"; \
+    done; \
+    exit 1
 
 COPY components/person_a/requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     grep -v '^bitsandbytes==' /tmp/requirements.txt > /tmp/requirements-runtime.txt \
     && python -m pip install --disable-pip-version-check \
-    --retries 20 --timeout 600 --prefer-binary \
+    --retries 20 --timeout 600 --resume-retries 20 --prefer-binary \
     --index-url https://pypi.org/simple \
     -r /tmp/requirements-runtime.txt
 
 # Keep the 41 MB native wheel separate so a transient or corrupted transfer
 # can be retried without downloading every other runtime dependency again.
-RUN for attempt in 1 2 3; do \
-        python -m pip install --no-cache-dir --disable-pip-version-check \
-            --retries 20 --timeout 600 --prefer-binary --no-deps \
+RUN --mount=type=cache,id=person-a-bitsandbytes,target=/root/.cache/pip \
+    for attempt in 1 2 3; do \
+        python -m pip install --disable-pip-version-check \
+            --retries 20 --timeout 600 --resume-retries 20 --prefer-binary --no-deps \
             --index-url https://pypi.org/simple \
             bitsandbytes==0.50.1 \
         && exit 0; \
