@@ -23,8 +23,9 @@ RUN python -m pip install --no-cache-dir --disable-pip-version-check \
     --extra-index-url https://pypi.org/simple
 
 COPY components/person_a/requirements.txt /tmp/requirements.txt
-RUN python -m pip install --no-cache-dir --disable-pip-version-check \
-    --retries 10 --timeout 120 \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --disable-pip-version-check \
+    --retries 20 --timeout 600 --prefer-binary \
     --index-url https://pypi.org/simple \
     -r /tmp/requirements.txt
 
