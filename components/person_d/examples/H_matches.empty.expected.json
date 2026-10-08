@@ -47,8 +47,8 @@
         "device": "cuda",
         "prompts": {
           "path": "reference/person_d/template_ref/visual_attribute_prompts.json",
-          "version": "1.0.0",
-          "sha256": "dbce02cae212adf1dadb905c868229d0c1ab5aa25b81b6c4c07342c764b2448c"
+          "version": "1.1.0",
+          "sha256": "e61b7d784aa8959305c22db7eb71921d5487ab479ebbaa16abb3c3ca957099d4"
         },
         "PLIP": {
           "weight_path": "reference/person_d/checkpoint/plip",
@@ -74,6 +74,7 @@
           "fallback_words_per_chunk": 35
         },
         "example_dir": "reference/person_d/template_ref/Example/ROI_Analysis",
+        "example_tree_sha256": "5a4ba948b955a1762700b8881eff12614b9120c47f6d44c7e8d2be201b7f75ce",
         "models_loaded": false
       },
       "visual_matching_filter": {

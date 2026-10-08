@@ -27,6 +27,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
+from components.person_d.assets import check_digest, file_sha256, required_digest, tree_sha256
 from contracts.paths import resolve_person_reference_path, sibling_logical_path
 
 
@@ -989,24 +990,21 @@ def get_consistent_labels(
 # WLW extractor
 # ============================================================
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def verify_sha256(path: Path, expected: Optional[str], label: str) -> None:
-    """Fail on a configured SHA-256 mismatch; ``None`` leaves the file unverified."""
+    """Fail on a configured weight SHA-256 mismatch; ``None`` leaves the file unverified."""
 
     if expected is None:
         return
     if not path.is_file():
         raise FileNotFoundError(f"{label} weight file does not exist: {path}")
-    actual = _sha256(path)
-    if actual != expected:
-        raise ValueError(f"{label} weight SHA-256 mismatch: expected {expected}, got {actual}")
+    check_digest(file_sha256(path), expected, f"{label} weight")
+
+
+def verify_example_tree(example_dir: Path, expected: str) -> None:
+    """Fail when the few-shot example tree differs from the configured tree hash."""
+
+    count, actual = tree_sha256(example_dir)
+    check_digest(actual, expected, f"Person D example tree ({count} files)")
 
 
 class VisualAttributeExtractor:
@@ -1044,10 +1042,13 @@ class VisualAttributeExtractor:
 
 
 def load_prompt_document(config: Mapping[str, Any]) -> tuple[Path, Dict[str, Any]]:
+    expected = required_digest(dict(config), "prompts_sha256", "extraction")
     path = resolve_person_reference_path("person_d", config["prompts_path"])
     if not path.is_file():
         raise FileNotFoundError(f"Person D prompt asset does not exist: {path}")
-    return path, json.loads(path.read_text(encoding="utf-8"))
+    raw = path.read_bytes()
+    check_digest(hashlib.sha256(raw).hexdigest(), expected, "Person D prompt asset")
+    return path, json.loads(raw.decode("utf-8"))
 
 
 def extraction_provenance(config: Mapping[str, Any], device: str) -> Dict[str, Any]:
@@ -1065,7 +1066,7 @@ def extraction_provenance(config: Mapping[str, Any], device: str) -> Dict[str, A
         "prompts": {
             "path": sibling_logical_path(prompts_path),
             "version": prompts.get("version"),
-            "sha256": _sha256(prompts_path),
+            "sha256": config["prompts_sha256"],
         },
         "PLIP": {
             "weight_path": sibling_logical_path(plip_path),
@@ -1083,6 +1084,9 @@ def extraction_provenance(config: Mapping[str, Any], device: str) -> Dict[str, A
     if settings.use_example_prototypes:
         example_dir = resolve_person_reference_path("person_d", config["example_dir"])
         provenance["example_dir"] = sibling_logical_path(example_dir)
+        provenance["example_tree_sha256"] = required_digest(
+            dict(config), "example_tree_sha256", "extraction"
+        )
     return provenance
 
 
@@ -1113,6 +1117,9 @@ def load_extractor(config: Mapping[str, Any], device: str) -> VisualAttributeExt
         example_dir = resolve_person_reference_path("person_d", config["example_dir"])
         if not example_dir.is_dir():
             raise FileNotFoundError(f"Person D example directory does not exist: {example_dir}")
+        verify_example_tree(
+            example_dir, required_digest(dict(config), "example_tree_sha256", "extraction")
+        )
 
     wrappers = {
         "PLIP": PLIPZeroShot(plip_path, device),

@@ -4,6 +4,7 @@
 test: it performs no image or visual-attribute inference and marks every ROI
 skipped.  ``mode: native`` extracts visual attributes from each reference-WSI
 ROI with PLIP and CONCH and matches them against the G diagnosticCriteria.
+Both modes run the same input validation (``validate_inputs``).
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ import json
 from copy import deepcopy
 from typing import Any, Callable
 
+from components.person_d.assets import check_digest, required_digest
+from components.person_d.geometry import roi_geometry
 from components.person_d.matching_filter import LabelMap, MatchingSettings, match_query
 from contracts.metadata import ensure_same_case, single_case
 from contracts.paths import resolve_person_reference_path, sibling_logical_path
@@ -33,7 +36,7 @@ def _producer(config: dict[str, Any]) -> str:
 def build_example_artifact(
     e_artifact: dict[str, Any], g_artifact: dict[str, Any], producer: str
 ) -> dict[str, Any]:
-    case_id = ensure_same_case(e_artifact, g_artifact)
+    case_id = validate_inputs(e_artifact, g_artifact)
     e_case = deepcopy(single_case(e_artifact))
     g_case = single_case(g_artifact)
     e_case["structured_report"] = deepcopy(g_case["structured_report"])
@@ -65,7 +68,7 @@ def build_example_artifact(
             stain["roi_num"] = len(stain["roi_list"])
 
     payload: dict[str, Any] = {
-        "data_mode": "inference",
+        "data_mode": g_artifact["payload"]["data_mode"],
         "DxItem_list": list(g_artifact["payload"]["DxItem_list"]),
         "reference_versions": deepcopy(
             g_artifact["payload"].get("reference_versions", {})
@@ -99,16 +102,19 @@ def _native_producer(config: dict[str, Any]) -> str:
 
 
 def _load_label_map(matching_config: dict[str, Any]) -> tuple[LabelMap, dict[str, Any]]:
+    expected = required_digest(matching_config, "label_map_sha256", "matching")
     path = resolve_person_reference_path("person_d", matching_config["label_map_path"])
     if not path.is_file():
         raise FileNotFoundError(f"Person D label map does not exist: {path}")
     raw = path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    check_digest(digest, expected, "Person D label map")
     document = json.loads(raw.decode("utf-8"))
     return LabelMap.from_document(document), {
         "path": sibling_logical_path(path),
         "version": document.get("version"),
         "criteria_version": document["criteria_version"],
-        "sha256": hashlib.sha256(raw).hexdigest(),
+        "sha256": digest,
     }
 
 
@@ -160,6 +166,26 @@ def _check_linkage(e_case: dict[str, Any], g_case: dict[str, Any]) -> None:
         raise ValueError("G contains duplicate query_id values")
 
 
+def validate_inputs(e_artifact: dict[str, Any], g_artifact: dict[str, Any]) -> str:
+    """Input boundary shared by example and native mode; returns the case_id.
+
+    Checks case identity, data_mode, stain / pair / query linkage and the metadata
+    geometry of every ROI, so both modes accept or reject the same E/G pair.
+    """
+
+    case_id = ensure_same_case(e_artifact, g_artifact)
+    e_mode, g_mode = e_artifact["payload"]["data_mode"], g_artifact["payload"]["data_mode"]
+    if e_mode != g_mode:
+        raise ValueError(f"E/G data_mode values differ: E={e_mode!r}, G={g_mode!r}")
+    e_case = single_case(e_artifact)
+    _check_linkage(e_case, single_case(g_artifact))
+    for block in e_case["tissue_blocks"]:
+        for stain in block["stains"]:
+            for roi in stain["roi_list"]:
+                roi_geometry(roi)
+    return case_id
+
+
 def _model_summary(models: dict[str, Any]) -> dict[str, Any]:
     return {
         name: {
@@ -187,17 +213,14 @@ def build_native_artifact(
 ) -> dict[str, Any]:
     """Build H; models load only when at least one ROI needs extraction."""
 
-    case_id = ensure_same_case(e_artifact, g_artifact)
+    case_id = validate_inputs(e_artifact, g_artifact)
     producer = _native_producer(config)
     settings = MatchingSettings.from_config(config["matching"])
     label_map, label_map_info = _load_label_map(config["matching"])
     data_mode = g_artifact["payload"]["data_mode"]
-    if e_artifact["payload"]["data_mode"] != data_mode:
-        raise ValueError("E/G data_mode values differ")
 
     case = deepcopy(single_case(e_artifact))
     g_case = single_case(g_artifact)
-    _check_linkage(case, g_case)
     case["structured_report"] = deepcopy(g_case["structured_report"])
     records = case["structured_report"]["DxItems"]
 

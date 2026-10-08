@@ -21,7 +21,9 @@ python -c "import json, torch; from pathlib import Path; from conch.open_clip_cu
 | `component_version` | Written as the H `producer`; must match `component.yaml` and the image tag. |
 | `device` | `cuda`, `cuda:<n>`, or `cpu`. A CUDA device fails when CUDA is unavailable; there is no silent CPU fallback. |
 | `extraction.prompts_path` | Attribute vocabulary, option descriptions, multi-select attributes, and PLIP/CONCH prompts. |
+| `extraction.prompts_sha256` | Required SHA-256 of the prompt asset, checked at the start of every native run; a mismatch fails. |
 | `extraction.example_dir` | Few-shot `ROI_Analysis/<group>/<attribute>/<option>/` images; required when `use_example_prototypes` is true. |
+| `extraction.example_tree_sha256` | Required tree hash of `example_dir` (algorithm in `external-assets.yaml`) when `use_example_prototypes` is true, checked before the models load; a mismatch fails. |
 | `extraction.plip.weight_path` | Local `vinid/plip` snapshot directory. `revision` records the expected Hugging Face revision. |
 | `extraction.conch.checkpoint_path` | Local CONCH `pytorch_model.bin`; `model_name` selects the CONCH model config. |
 | `extraction.plip.sha256`, `extraction.conch.sha256` | Expected SHA-256 of PLIP `pytorch_model.bin` and the CONCH checkpoint, checked before loading; a mismatch fails. `null` leaves the file unverified and is recorded in H. CONCH loads with `strict=False`, so set its value once the gated file is obtained. |
@@ -32,6 +34,7 @@ python -c "import json, torch; from pathlib import Path; from conch.open_clip_cu
 | `extraction.copy_na_labels` | Keep agreed `N/A` labels. |
 | `extraction.enable_prompt_chunking`, `token_safety_margin`, `fallback_words_per_chunk` | Long option prompts are split into chunks whose embeddings are averaged. |
 | `matching.label_map_path` | Extraction-label to diagnosticCriteria-option aliases; its `criteria_version` must equal G `diagnosticCriteria.version`. |
+| `matching.label_map_sha256` | Required SHA-256 of the label map, checked at the start of every native run; a mismatch fails. |
 | `matching.condition_weights` | Weight in [-1, 1] for each informative condition: `Must_True`, `High_Possibly_True`, `Low_Possibly_True`, `Must_False`. |
 | `matching.score_threshold` | Selected requires `score >= score_threshold`, within [-1, 1]. |
 | `matching.min_evaluated_attributes` | Fewer evaluated attributes yields `skipped` with `insufficient_visual_evidence`. |

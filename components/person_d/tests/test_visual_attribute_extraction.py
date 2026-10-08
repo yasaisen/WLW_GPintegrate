@@ -136,6 +136,36 @@ class VisualAttributeExtractionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
             self.extraction.verify_sha256(weight, "0" * 64, "CONCH")
 
+    def test_example_tree_digest_is_enforced(self) -> None:
+        from components.person_d.assets import tree_sha256
+
+        _, digest = tree_sha256(self.example_dir)
+        self.extraction.verify_example_tree(self.example_dir, digest)
+        Image.new("RGB", (4, 4)).save(self.example_dir / "Architecture" / "Pattern" / "Solid" / "extra.png")
+        with self.assertRaisesRegex(ValueError, r"example tree \(2 files\) SHA-256 mismatch"):
+            self.extraction.verify_example_tree(self.example_dir, digest)
+
+    def test_prompt_asset_digest_is_enforced(self) -> None:
+        import json
+
+        from contracts.paths import REFERENCE_ROOT
+
+        directory = REFERENCE_ROOT / "person_d" / "template_ref"
+        directory.mkdir(parents=True, exist_ok=True)
+        temp = tempfile.TemporaryDirectory(dir=directory)
+        self.addCleanup(temp.cleanup)
+        prompts = Path(temp.name) / "prompts.json"
+        prompts.write_text(json.dumps(VOCABULARY), encoding="utf-8")
+        config = {
+            "prompts_path": str(prompts),
+            "prompts_sha256": hashlib.sha256(prompts.read_bytes()).hexdigest(),
+        }
+        self.assertEqual(VOCABULARY, self.extraction.load_prompt_document(config)[1])
+        with self.assertRaisesRegex(ValueError, "prompt asset SHA-256 mismatch"):
+            self.extraction.load_prompt_document({**config, "prompts_sha256": "0" * 64})
+        with self.assertRaisesRegex(ValueError, "prompts_sha256"):
+            self.extraction.load_prompt_document({"prompts_path": str(prompts)})
+
     def test_cuda_request_without_cuda_fails(self) -> None:
         import torch
 

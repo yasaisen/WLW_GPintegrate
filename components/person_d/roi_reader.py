@@ -1,7 +1,8 @@
 """Read E ROI pixels from E's stain filepath and ROI geometry.
 
 ``main_info.roi_path`` is used when E provides a crop; it must stay below
-sibling ``run/``.  Otherwise the WSI at ``stains[].filepath`` is read at
+sibling ``run/`` and its pixel size must equal ``main_info.roi_wh`` (no
+resampling).  Otherwise the WSI at ``stains[].filepath`` is read at
 ``level0_info.xywh`` and resampled to ``main_info.roi_wh``.  Only an absolute
 WSI filepath may point outside ``run/``.
 """
@@ -11,49 +12,12 @@ from __future__ import annotations
 import math
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping
 
 from PIL import Image
 
+from components.person_d.geometry import roi_geometry
 from contracts.paths import resolve_run_path
-
-
-def _mpp_pair(value: Any, name: str) -> tuple[float, float]:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        pair = (float(value), float(value))
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) == 2:
-        pair = (float(value[0]), float(value[1]))
-    else:
-        raise ValueError(f"Invalid {name}: {value!r}")
-    if any(not math.isfinite(part) or part <= 0 for part in pair):
-        raise ValueError(f"{name} must contain positive finite values: {value!r}")
-    return pair
-
-
-def roi_geometry(roi: Mapping[str, Any]) -> tuple[tuple[int, int, int, int], tuple[int, int], float]:
-    """Validate E geometry and return level-0 xywh, target size, and target downsample."""
-
-    roi_id = roi["roi_id"]
-    x, y, width, height = (int(value) for value in roi["level0_info"]["xywh"])
-    if x < 0 or y < 0 or width <= 0 or height <= 0:
-        raise ValueError(f"ROI {roi_id} has invalid level0_info.xywh")
-    target_w, target_h = (int(value) for value in roi["main_info"]["roi_wh"])
-    if target_w <= 0 or target_h <= 0:
-        raise ValueError(f"ROI {roi_id} has invalid main_info.roi_wh")
-
-    level0_mpp = _mpp_pair(roi["level0_info"]["mpp"], "level0_info.mpp")
-    target_mpp = _mpp_pair(roi["main_info"]["mpp"], "main_info.mpp")
-    expected = (
-        round(width * level0_mpp[0] / target_mpp[0]),
-        round(height * level0_mpp[1] / target_mpp[1]),
-    )
-    if abs(expected[0] - target_w) > 1 or abs(expected[1] - target_h) > 1:
-        raise ValueError(
-            f"ROI {roi_id} main_info.roi_wh {target_w, target_h} does not match "
-            f"level0 xywh and mpp (expected about {expected})"
-        )
-    downsample = min(target_mpp[0] / level0_mpp[0], target_mpp[1] / level0_mpp[1])
-    return (x, y, width, height), (target_w, target_h), downsample
 
 
 def read_wsi_roi(slide: Any, roi: Mapping[str, Any]) -> Image.Image:
@@ -98,13 +62,18 @@ class ROIImageReader:
         self._slides.clear()
 
     def read(self, stain: Mapping[str, Any], roi: Mapping[str, Any]) -> Image.Image:
-        roi_geometry(roi)
+        _, target_size, _ = roi_geometry(roi)
         roi_path = roi["main_info"].get("roi_path")
         if roi_path:
             path = resolve_run_path(roi_path)
             if not path.is_file():
                 raise FileNotFoundError(f"ROI image is missing: {path}")
             with Image.open(path) as source:
+                if source.size != target_size:
+                    raise ValueError(
+                        f"ROI {roi['roi_id']} crop {path} is {source.size[0]} x {source.size[1]} px, "
+                        f"but main_info.roi_wh is {target_size[0]} x {target_size[1]}"
+                    )
                 return source.convert("RGB")
 
         raw = Path(str(stain["filepath"])).expanduser()

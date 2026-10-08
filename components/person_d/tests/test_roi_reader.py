@@ -90,6 +90,15 @@ class ROIReaderTests(unittest.TestCase):
             self.addCleanup(image.close)
             self.assertEqual((10, 20, 30), image.getpixel((0, 0)))
 
+    def test_roi_crop_with_another_size_than_roi_wh_fails(self) -> None:
+        RUN_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=RUN_ROOT) as directory:
+            crop = Path(directory) / "roi.png"
+            Image.new("RGB", (13, 17)).save(crop)
+            reader = ROIImageReader(lambda path: self.fail("WSI must not be opened"))
+            with self.assertRaisesRegex(ValueError, "13 x 17 px, but main_info.roi_wh is 500 x 400"):
+                reader.read({"stain_id": "s", "filepath": "unused"}, _roi(roi_path=str(crop)))
+
 
 if __name__ == "__main__":
     unittest.main()

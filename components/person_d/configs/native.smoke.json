@@ -4,7 +4,9 @@
   "device": "cuda",
   "extraction": {
     "prompts_path": "../reference/person_d/template_ref/visual_attribute_prompts.json",
+    "prompts_sha256": "e61b7d784aa8959305c22db7eb71921d5487ab479ebbaa16abb3c3ca957099d4",
     "example_dir": "../reference/person_d/template_ref/Example/ROI_Analysis",
+    "example_tree_sha256": "5a4ba948b955a1762700b8881eff12614b9120c47f6d44c7e8d2be201b7f75ce",
     "plip": {
       "weight_path": "../reference/person_d/checkpoint/plip",
       "revision": "67ade53ddd32195868f422585f72698ef5d15094",
@@ -29,6 +31,7 @@
   },
   "matching": {
     "label_map_path": "../reference/person_d/template_ref/criteria_label_map.json",
+    "label_map_sha256": "e1f59e667358fbca6f6bfe70cbfc140cd6c0a4ed8f6661920b5562a042f46e38",
     "condition_weights": {
       "Must_True": 1.0,
       "High_Possibly_True": 1.0,

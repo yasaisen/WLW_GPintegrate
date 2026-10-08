@@ -20,7 +20,7 @@
 |---|---|---|
 | selected | 兩個 HE ROI 的 `query-004` | 固定 `selected`／`visual_attributes_match` |
 | rejected | 兩個 HE ROI 的 `query-005` | 固定 `rejected`／`score_below_threshold` |
-| 未驗證 Must_True | 兩個 HE ROI 的 `query-001`、`query-002` | 不可能 `selected`；`skipped`／`insufficient_visual_evidence` 或 `rejected`／`must_condition_failed` |
+| 真實 criteria | 兩個 HE ROI 的 `query-001`、`query-002` | 由模型決定，須符合 `score_rule`；Must_True 屬性未取得兩模型共識時不會 `selected`（實測：he-roi-001 為 `skipped`／`insufficient_visual_evidence`，he-roi-002 為 `rejected`／`must_condition_failed`） |
 | 非 reference WSI（skipped） | `case-001-er` 的所有 ROI × 所有 query | 固定 `skipped`／`stain_not_in_reference_wsi`，每個 query 一筆並帶 `query_id` |
 | unmapped query（skipped） | `case-001-query-003` | 固定 `skipped`／`query_unmapped` |
 | 空 ROI case | `E_rois.empty.valid.json` | 逐內容比對 |
@@ -28,9 +28,10 @@
 `query-004`、`query-005` 的 criteria 由 `query-001` 衍生：每個屬性的選項分別全設為 High_Possibly_True
 或 Low_Possibly_True（`Unable to confirm` 設為 Not_Mentioned），沒有任何 Must_True／Must_False。只要兩個
 模型在至少一個屬性上達成共識（`min_evaluated_attributes` = 1），score 就分別是 1 與 -1，結果與模型
-預測的是哪個標籤無關；實測每個 HE ROI 有 5 個共識屬性。`query-001`、`query-002` 的真實 criteria 在
-`Tumour_Border`、`Myoepithelial_Cell_Layer`、`Stromal_Characteristics` 有 Must_True，這三個屬性不在
-vocabulary 內，因此永遠無法驗證。各分支以假模型做的確定性覆蓋另見 `components/person_d/tests/`。
+預測的是哪個標籤無關；實測每個 HE ROI 有 5–6 個共識屬性。`query-001`、`query-002` 的真實 criteria 在
+`Tumour_Border`、`Myoepithelial_Cell_Layer`、`Stromal_Characteristics` 有 Must_True；這些屬性只有在兩個
+模型達成共識時才算驗證，否則該 query 不會 `selected`。各分支以假模型做的確定性覆蓋另見
+`components/person_d/tests/`。
 
 ## 來源與去識別化
 

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +14,7 @@ from PIL import Image
 
 from components.person_d.visual_filter import build_example_artifact, build_native_artifact
 from contracts.metadata import iter_rois
-from contracts.paths import REFERENCE_ROOT
+from contracts.paths import PROJECT_ROOT, REFERENCE_ROOT, RUN_ROOT
 from contracts.runtime import validate_artifact
 
 
@@ -35,6 +39,18 @@ NEGATIVE = {"Cellular_and_Nuclear": {"Chromatin": ["Regular"], "Cell_Pleomorphis
 
 def _load(name: str) -> dict:
     return json.loads((EXAMPLES / name).read_text(encoding="utf-8"))
+
+
+def _with_evaluation_mode(g: dict) -> dict:
+    g = copy.deepcopy(g)
+    g["payload"]["data_mode"] = "evaluation"
+    return g
+
+
+def _with_negative_width(e: dict) -> dict:
+    e = copy.deepcopy(e)
+    next(roi for _, roi in iter_rois(e["payload"]))["level0_info"]["xywh"][2] = -1
+    return e
 
 
 class _FakeExtractor:
@@ -85,6 +101,7 @@ class NativeVisualFilterTests(unittest.TestCase):
             (COMPONENT / "configs/native.example.json").read_text(encoding="utf-8")
         )
         self.config["matching"]["label_map_path"] = str(label_map)
+        self.config["matching"]["label_map_sha256"] = hashlib.sha256(label_map.read_bytes()).hexdigest()
         self.e = _load("E_rois.valid.json")
         self.g = _load("G_queries.valid.json")
 
@@ -257,6 +274,22 @@ class NativeVisualFilterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "dx_pair_id"):
             self._build(extractor, g=g)
 
+    def test_data_mode_and_geometry_are_checked_in_both_modes(self) -> None:
+        cases = (
+            (self.e, _with_evaluation_mode(self.g), "data_mode values differ"),
+            (_with_negative_width(self.e), self.g, "invalid level0_info.xywh"),
+        )
+        for e, g, message in cases:
+            with self.assertRaisesRegex(ValueError, message):
+                build_example_artifact(e, g, "person-d/visual-filter:0.2.0")
+            with self.assertRaisesRegex(ValueError, message):
+                self._build(_FakeExtractor({}), e=e, g=g)
+
+    def test_label_map_digest_is_enforced(self) -> None:
+        self.config["matching"]["label_map_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "label map SHA-256 mismatch"):
+            self._build(_FakeExtractor({}))
+
     def test_extraction_errors_propagate(self) -> None:
         class _Broken(_FakeExtractor):
             def extract(self, image):
@@ -274,6 +307,33 @@ class ExampleModeTests(unittest.TestCase):
         )
         validate_artifact(artifact, "H.MatchedROIs")
         self.assertEqual(_load("H_matches.expected.json"), artifact)
+
+    def test_cli_rejects_invalid_inputs_without_writing_h(self) -> None:
+        RUN_ROOT.mkdir(parents=True, exist_ok=True)
+        e, g = _load("E_rois.valid.json"), _load("G_queries.valid.json")
+        with tempfile.TemporaryDirectory(dir=RUN_ROOT) as directory:
+            for name, (e_doc, g_doc) in {
+                "data_mode": (e, _with_evaluation_mode(g)),
+                "geometry": (_with_negative_width(e), g),
+            }.items():
+                e_path, g_path = Path(directory) / f"{name}_E.json", Path(directory) / f"{name}_G.json"
+                e_path.write_text(json.dumps(e_doc), encoding="utf-8")
+                g_path.write_text(json.dumps(g_doc), encoding="utf-8")
+                output = Path(directory) / f"{name}_H.json"
+                result = subprocess.run(
+                    [
+                        sys.executable, "-m", "components.person_d.visual_filter",
+                        "--input", str(e_path), "--input", str(g_path),
+                        "--output", str(output),
+                        "--config", "components/person_d/configs/example.json",
+                    ],
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                )
+                self.assertNotEqual(0, result.returncode, f"{name}: {result.stdout}")
+                self.assertFalse(output.exists(), name)
 
 
 if __name__ == "__main__":
