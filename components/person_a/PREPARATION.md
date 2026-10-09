@@ -1,7 +1,7 @@
 # 甲（Person A）：Report Decompose／Query Generation 準備與交付
 
-甲負責兩個獨立 executable。目前目錄內只有 contract stub；交付正式版本時應替換內部邏輯，但保留
-module 名稱、Unified CLI、單案行為與 schema version。共通規則見專案根目錄 `README.md`。
+甲負責兩個獨立 executable。正式實作必須保留 module 名稱、Unified CLI、單案行為與 schema
+version。共通規則見專案根目錄 `README.md`，目前實作方式見同目錄 `README.md`。
 
 ## 1. Input／output 規格
 
@@ -236,11 +236,11 @@ python -m components.person_a.query_generation \
 
 ## 5. Dockerfile／requirements.txt
 
-目前 stub 使用 Python 3.12、CPU 與 standard library。正式交付必須更新 `component.yaml`、Dockerfile、
-requirements 與 README，使其共同描述實際 Python、NLP/LLM framework、CPU/GPU 與 RAM/VRAM 需求。
+正式 runtime 由 `component.yaml`、Dockerfile、requirements 與 README 共同宣告 Python、NLP/LLM
+framework、CPU/GPU 與 RAM/VRAM 需求。
 
 ```bash
-docker build --no-cache \
+docker build \
   -f components/person_a/Dockerfile \
   -t wlw/person-a:<version> .
 ```
