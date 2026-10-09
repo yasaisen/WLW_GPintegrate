@@ -14,6 +14,9 @@
     "max_new_tokens": 8192,
     "dtype": "auto",
     "require_cuda": true,
+    "device_map_strategy": "auto_cpu_offload",
+    "gpu_memory_limit": "1200MiB",
+    "cpu_memory_limit": "12GiB",
     "token_env": "HF_TOKEN"
   }
 }

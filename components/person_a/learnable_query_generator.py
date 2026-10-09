@@ -254,9 +254,25 @@ class LearnableSoftPromptGenerator:
         self.require_cuda = bool(config.get("require_cuda", True))
         self.dtype_name = str(config.get("dtype", "auto"))
         self.token_env = str(config.get("token_env", "HF_TOKEN"))
+        self.device_map_strategy = str(
+            config.get("device_map_strategy", "single_device")
+        )
+        self.gpu_memory_limit = str(
+            config.get("gpu_memory_limit", "1200MiB")
+        )
+        self.cpu_memory_limit = str(
+            config.get("cpu_memory_limit", "12GiB")
+        )
 
         if self.required_chunk_count < 1:
             raise ValueError("required_chunk_count must be positive")
+        if self.device_map_strategy not in {
+            "single_device",
+            "auto_cpu_offload",
+        }:
+            raise ValueError(
+                "device_map_strategy must be single_device or auto_cpu_offload"
+            )
         if not self.checkpoint_path.is_file():
             raise FileNotFoundError(
                 f"Soft-prompt checkpoint was not found: {self.checkpoint_path}"
@@ -276,6 +292,7 @@ class LearnableSoftPromptGenerator:
             "attribute_reference": reference_provenance,
             "required_chunk_count": self.required_chunk_count,
             "target_format": TARGET_FORMAT,
+            "device_map_strategy": self.device_map_strategy,
         }
         self._torch: Any = None
         self._tokenizer: Any = None
@@ -330,11 +347,35 @@ class LearnableSoftPromptGenerator:
         tokenizer = AutoTokenizer.from_pretrained(self.model_name, **common)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            dtype=dtype,
+        model_kwargs: dict[str, Any] = {
+            "dtype": dtype,
             **common,
-        ).to(device)
+        }
+        if device == "cuda" and self.device_map_strategy == "auto_cpu_offload":
+            # Docker Desktop on a 4 GiB display GPU can expose less allocatable
+            # CUDA memory than nvidia-smi reports. Keep the original BF16 model
+            # precision, but dispatch only a bounded share of its layers to the
+            # GPU and retain the rest in host RAM.
+            model_kwargs.update(
+                {
+                    "device_map": "auto",
+                    "max_memory": {
+                        0: self.gpu_memory_limit,
+                        "cpu": self.cpu_memory_limit,
+                    },
+                    "low_cpu_mem_usage": True,
+                    "offload_buffers": True,
+                }
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                **model_kwargs,
+            )
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                **model_kwargs,
+            ).to(device)
         model.config.use_cache = True
         model.eval()
         for parameter in model.parameters():
@@ -405,17 +446,32 @@ class LearnableSoftPromptGenerator:
                 "checkpoint_run_name": checkpoint.get("run_name"),
                 "checkpoint_epoch": checkpoint.get("current_epoch"),
                 "soft_prompt_len": soft_prompt_len,
+                "gpu_memory_limit": (
+                    self.gpu_memory_limit
+                    if device == "cuda"
+                    and self.device_map_strategy == "auto_cpu_offload"
+                    else None
+                ),
+                "model_device_map": {
+                    str(name): str(location)
+                    for name, location in getattr(
+                        model, "hf_device_map", {}
+                    ).items()
+                },
             }
         )
+        embedding_device = str(model.get_input_embeddings().weight.device)
+        if embedding_device == "meta":
+            raise RuntimeError("Model input embeddings remained on the meta device")
         self._torch = torch
         self._tokenizer = tokenizer
         self._model = model
         self._soft_prompt = soft_prompt.to(
-            device=device,
+            device=embedding_device,
             dtype=model.get_input_embeddings().weight.dtype,
         )
         self._soft_prompt_len = soft_prompt_len
-        self._device = device
+        self._device = embedding_device
 
     def _split_prompt(self, user_text: str) -> dict[str, Any]:
         torch = self._torch
