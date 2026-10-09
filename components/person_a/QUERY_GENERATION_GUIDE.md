@@ -1,4 +1,4 @@
-# Query Generation implementation guide
+# Query Generation
 
 ## Contract
 
@@ -8,28 +8,22 @@ D.DxPairs@2.0 + F.Chunks@2.0
                     └─ G.VisualAttributeQueries@2.0
 ```
 
-D and F must have the same `case_id`. Chunks are joined to diagnoses by
-`dx_pair_id`, never by array position. G preserves the D case/diagnosis
-structure and adds `visualAttrQueries` to each DxItem.
+D and F must share `case_id`. F chunks are joined to a diagnosis by
+`dx_pair_id`. G preserves D and adds `visualAttrQueries` to each DxItem.
 
 ## Backends
 
-- `reference`: maps Histologic Type to the mounted type-level visual criteria.
-- `learnable_soft_prompt`: uses Gemma plus the trained Stage 2 condition `.pt`
-  soft prompt and exactly the configured number of F chunks (currently three).
-  Its output is a complete group/attribute/option tree. Every option is mapped
-  to `Must_True`, `Must_False`, `High_Possibly_True`, `Low_Possibly_True`,
-  `Negligible`, or `Not_Mentioned`.
-- `example`: deterministic empty queries for public contract tests only.
+- `example`: deterministic public contract fixture.
+- `reference`: map Histologic Type to mounted type-level visual criteria.
+- `learnable_soft_prompt`: run Gemma with the mounted Stage 2 `.pt`; use exactly
+  three F chunks for each mapped Histologic Type.
 
-`query_generation.py` orchestrates the contract. `reference_data.py` loads the
-mapping and visual reference tables. `learnable_query_generator.py` loads Gemma,
-the soft-prompt checkpoint, and the condition-annotated chunk reference. It
-validates the complete generated option-condition tree before replacing the
-`conditions` maps in G. The training and evaluation scripts are provenance for
-this runtime logic; they are not invoked when generating G.
+The learned backend emits every canonical visual option with one condition:
+`Must_True`, `Must_False`, `High_Possibly_True`, `Low_Possibly_True`,
+`Negligible`, or `Not_Mentioned`. Output with missing/extra options or illegal
+conditions is rejected before G is written.
 
-## External files
+## Required external files
 
 ```text
 reference/person_a/
@@ -41,28 +35,16 @@ reference/person_a/
     └── chunks_with_attribute_condition.json
 ```
 
-These assets are mounted at `/reference:ro`. Their SHA-256 values and revisions
-are recorded in `external-assets.yaml`. Hugging Face downloads are cached in the
-writable sibling `run/cache/huggingface`; `HF_TOKEN` is supplied at runtime.
+Mount `reference/` at `/reference:ro`; use `run/cache/huggingface` as the
+Hugging Face cache and provide `HF_TOKEN` through the environment. Asset hashes
+and revisions are declared in `external-assets.yaml`.
 
-The runtime implementation was aligned to these Nano5 sources without copying
-the training loop into the production entrypoint:
+Person B only needs to provide schema-valid F chunks containing `dx_pair_id`,
+`chunk_id`, and non-empty `text`. Person A does not import Person B code.
 
-- `train_stage2_condition.py`, SHA-256
-  `41c100f9ee42a0e3b5140e42e4b93c77b056ae925e40ed88dcc43d49dca9fcb2`
-- `evaluate_stage2_condition.py`, SHA-256
-  `5a93e2b5577a4f47233d445618480fdbb436a86849f0cf132fc16fc2bf89e06b`
+## Run without Docker
 
-Those two scripts train/evaluate the soft prompt. Production inference only
-loads Gemma, the mounted `.pt`, D, F, and the mounted condition reference.
-The mounted checkpoint metadata is checked against the condition reference at
-startup: model name, target format, type-level SHA, annotated-chunk SHA,
-condition vocabulary, and the complete option tree must agree. The current
-checkpoint is shape `64 × 1152`, best epoch `21`.
-
-## CLI
-
-Reference mapping:
+Reference backend:
 
 ```bash
 python -m components.person_a.query_generation \
@@ -72,7 +54,7 @@ python -m components.person_a.query_generation \
   --config components/person_a/configs/query_generation.default.json
 ```
 
-Learnable soft prompt:
+Learned backend:
 
 ```bash
 python -m components.person_a.query_generation \
@@ -82,7 +64,10 @@ python -m components.person_a.query_generation \
   --config components/person_a/configs/query_generation.learnable.json
 ```
 
-In Docker, override the default Report Decompose entrypoint:
+## Run with Docker
+
+The image defaults to Report Decompose, so Query Generation overrides the
+entrypoint:
 
 ```bash
 docker run --rm --gpus all \
@@ -98,18 +83,16 @@ docker run --rm --gpus all \
   --config /app/components/person_a/configs/query_generation.learnable.json
 ```
 
+`query_generation.learnable.json` limits GPU placement and offloads remaining
+BF16 layers to host RAM for low-memory GPUs. On an HPC GPU with sufficient VRAM,
+set `device_map_strategy` to `single_device` in an external runtime config.
+
 ## Acceptance checks
 
-- D and F pass their canonical schemas and share `case_id`.
-- The learnable backend receives at least three F chunks for each mapped
-  Histologic Type DxPair.
-- Person B does not need to expose its internal code to Person A. It only needs
-  to provide a valid F artifact whose chunks contain `dx_pair_id`, `chunk_id`,
-  and non-empty `text`; Person A uses the first three chunks for that DxPair.
-- Every emitted query points to the correct `dx_pair_id` and lists the actual
-  `chunk_ids` used.
-- The generated tree contains every canonical option exactly once, and every
-  leaf is one of the six legal condition strings.
+- D and F pass their schemas and share `case_id`.
+- Each mapped Histologic Type has at least three matching F chunks.
+- Query `dx_pair_id` and `chunk_ids` identify the actual inputs used.
+- Every visual option receives exactly one legal condition.
 - G passes `G_visual_attribute_queries.schema.json` and preserves D metadata.
-- Missing reference/checkpoint/model/GPU failures exit non-zero without a
-  partial G output.
+- Missing assets, model/GPU failures, or invalid model output exit non-zero and
+  do not leave a partial G.

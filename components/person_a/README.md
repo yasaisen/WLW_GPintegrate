@@ -2,53 +2,37 @@
 
 Component version: `0.9.0`
 
-This directory contains the Person A research implementation behind the shared
-single-case CLI. It preserves the central contracts and does not store reports,
-WSIs, model weights, reference tables, credentials, caches, or runtime outputs.
+## Interfaces
 
-## Contract boundaries
+| Entrypoint | Input | Output |
+|---|---|---|
+| `components.person_a.prepare_case_list` | `B.ReportTables@1.0` | `CaseListInput@1.0` batch |
+| `components.person_a.report_decompose` | one `CaseListInput@1.0` case | `D.DxPairs@2.0` |
+| `components.person_a.query_generation` | `D.DxPairs@2.0` + `F.Chunks@2.0` | `G.VisualAttributeQueries@2.0` |
 
-- `report_decompose`: `CaseListInput@1.0` → `D.DxPairs@2.0`
-- `query_generation`: `D.DxPairs@2.0` + `F.Chunks@2.0` →
-  `G.VisualAttributeQueries@2.0`
+`report_decompose` and `query_generation` handle one case per invocation.
+`pipeline/run_pipeline.py` demonstrates multi-case fan-out with repository
+example configs. Production orchestration uses the same single-case CLI with
+production configs. Inputs are identified by contract, not command-line order.
 
-Each component invocation handles exactly one case. `pipeline/run_pipeline.py`
-splits a multi-case CaseList and invokes the components once per case.
-`B.ReportTables@1.0` is an upstream ingestion manifest, not the runtime input of
-Report Decompose. For the existing hospital Excel layout,
-`components.person_a.prepare_case_list` converts B to canonical CaseList first.
+## Behavior
 
-## Implemented behavior
+- VGHTC: use the original hospital Regex only.
+- CGMH: use the hospital Regex first and MedGemma for configured fallback cases.
+- Normalize Histologic Type to `UDH`, `FEA`, `ADH`, `DCIS`, `IC`, `OTHER`, or
+  `AMBIGUOUS`; keep other diagnostic items as free text.
+- Preserve case, block, stain, WSI identity, and WSI filepath in D.
+- Generate G from D and Person B's F chunks using either deterministic reference
+  mapping or Gemma plus the mounted Stage 2 soft-prompt checkpoint.
 
-- VGHTC report extraction: original hospital Regex only.
-- CGMH report extraction: hospital Regex first, then MedGemma according to the
-  configured fallback behavior.
-- Histologic Type classification: `UDH`, `FEA`, `ADH`, `DCIS`, `IC`, `OTHER`,
-  and `AMBIGUOUS`; other diagnostic results remain free text.
-- D preserves the source case, block, stain, WSI identity, and WSI filepath.
-- Query Generation supports reference mapping and the Nano5 Stage 2 condition
-  soft-prompt for Gemma. The learned backend consumes three F chunks and
-  predicts one of six occurrence conditions for every canonical visual option.
-
-## Runtime
+## Runtime and external assets
 
 - Python 3.11
-- PyTorch 2.6.0 + CUDA 12.4 wheel
+- PyTorch 2.6.0 with CUDA 12.4
 - Transformers 5.16.1, Accelerate 1.14.0, bitsandbytes 0.50.1
-- Report Decompose with MedGemma: one CUDA GPU; current tested target is at
-  least 4 GB VRAM using NF4 4-bit loading and CPU offload.
-- Learnable Query Generation: one CUDA GPU plus mounted soft-prompt checkpoint.
-  The current Stage 2 checkpoint is a 64-token by 1152-dimension soft prompt,
-  selected at epoch 21. It was trained for `ADH`, `FEA`, `DCIS`, `IC`, and
-  `UDH`, with three retrieval conditions (3/0, 2/1, and 1/2 correct/wrong
-  chunks).
+- NVIDIA GPU required for MedGemma and the learnable query backend
 
-The base models are downloaded from Hugging Face into `/run/cache/huggingface`.
-The token is read from `HF_TOKEN`; it is never stored in this repository.
-
-## External assets
-
-The sibling directory is mounted read-only as `/reference`:
+External files are not committed or copied into the image:
 
 ```text
 reference/person_a/
@@ -61,17 +45,16 @@ reference/person_a/
     └── chunks_with_attribute_condition.json
 ```
 
-Exact revisions, SHA-256 values, licenses, and mount paths are recorded in
-`external-assets.yaml`. These files are intentionally not copied into the image
-or committed to Git.
+`external-assets.yaml` records their expected paths and SHA-256 values. Mount
+the sibling `reference/` directory read-only at `/reference` and the sibling
+`run/` directory read-write at `/run`. Set `HF_TOKEN` at runtime; do not store it
+in a config file.
 
 ## CLI
 
-Commands below run from the repository root. All JSON input/output paths must
-be under the sibling `run/` directory; config files stay under
-`components/person_a/configs/`.
+Run from the repository root.
 
-Legacy hospital tables to a multi-case CaseList batch:
+Normalize hospital tables to CaseList:
 
 ```bash
 python -m components.person_a.prepare_case_list \
@@ -80,7 +63,10 @@ python -m components.person_a.prepare_case_list \
   --config components/person_a/configs/report_decompose.default.json
 ```
 
-One normalized case to D:
+The orchestrator must split this batch into one-case CaseList files before
+calling `report_decompose`.
+
+Create D for one case:
 
 ```bash
 python -m components.person_a.report_decompose \
@@ -89,7 +75,7 @@ python -m components.person_a.report_decompose \
   --config components/person_a/configs/report_decompose.default.json
 ```
 
-D and F to G with the learned backend:
+Create G from D and F:
 
 ```bash
 python -m components.person_a.query_generation \
@@ -104,13 +90,12 @@ python -m components.person_a.query_generation \
 Build from the repository root:
 
 ```bash
-docker build --no-cache \
+docker build \
   -f components/person_a/Dockerfile \
   -t wlw/person-a:0.9.0 .
 ```
 
-Run one CaseList case. The standard sibling mounts are read-only reference data
-and writable runtime state:
+The default image entrypoint is `report_decompose`:
 
 ```bash
 docker run --rm --gpus all \
@@ -123,14 +108,10 @@ docker run --rm --gpus all \
   --config /app/components/person_a/configs/report_decompose.default.json
 ```
 
-Hospital report/WSI directories may be mounted separately, for example at
-`/data/reports:ro`; the generated CaseList must store the matching container
-filepath. WSI files are referenced by path and are never embedded in D.
+See `REPORT_DECOMPOSE_GUIDE.md` for Excel/WSI mounts and
+`QUERY_GENERATION_GUIDE.md` for the Query Generation Docker command.
 
-## Examples and tests
-
-- `examples/report_decompose/`: valid/invalid CaseList, config, expected D.
-- `examples/query_generation/`: valid D/F, config, expected G.
+## Validation
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -v
@@ -139,23 +120,6 @@ PYTHONDONTWRITEBYTECODE=1 python -m unittest discover \
 docker compose -f integration/compose.yaml config --quiet
 ```
 
-## Known failure conditions
-
-The CLI exits non-zero and must not leave a partial output when the input is not
-schema-valid, contains more than one case, has unknown contract versions, mixes
-case IDs, requests an unknown DxItem, lacks a declared reference/checkpoint, or
-cannot load the configured GPU/model. Reports without a Histologic Type are
-valid; they simply do not produce that DxItem.
-
-## Change log
-
-- `0.9.0`: replaced the old selected-value soft prompt with the Stage 2
-  option-condition model. It now writes the learned six-class condition for
-  every visual option and verifies that the mounted checkpoint and annotated
-  chunks were trained from the same reference data.
-- `0.8.0`: aligned with the sibling `reference/` and `run/` layout; changed
-  Report Decompose from B batch input/D index output to single-case
-  `CaseListInput@1.0`/`D.DxPairs@2.0`; kept B-to-CaseList as an explicit upstream
-  adapter; removed external assets and the production B manifest from the image.
-- `0.7.0`: integrated hospital table parsing, Regex/MedGemma report extraction,
-  seven-class Histologic Type, and learnable Query Generation.
+The CLI exits non-zero and does not write a partial artifact when input schema,
+case identity, external assets, model loading, or output schema validation fails.
+Reports without Histologic Type are valid and do not emit that DxItem.

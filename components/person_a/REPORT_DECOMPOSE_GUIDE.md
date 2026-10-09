@@ -1,75 +1,68 @@
-# Report Decompose implementation guide
+# Report Decompose
 
-## Current data flow
+## Data flow
 
 ```text
 B.ReportTables manifest
   └─ prepare_case_list.py
-       └─ CaseListInput (may contain many cases)
-            └─ pipeline fan-out (one case per file/invocation)
+       └─ CaseListInput batch
+            └─ pipeline fan-out
                  └─ report_decompose.py
                       └─ D.DxPairs@2.0 (one case)
 ```
 
-The change from the earlier implementation is the component boundary:
-`report_decompose.py` no longer opens Excel and no longer creates a D index.
-Hospital table parsing remains available in `prepare_case_list.py`,
-`table_parsers.py`, and `xlsx_reader.py`, but it is an upstream normalization
-step. This matches the central `CaseListInput@1.0` contract.
+`report_decompose.py` accepts one normalized CaseList case; it does not open
+Excel directly. `prepare_case_list.py`, `table_parsers.py`, and `xlsx_reader.py`
+perform the upstream Excel/CSV normalization.
 
-## Responsibilities by file
+VGHTC always uses the original hospital Regex. CGMH uses its Regex first and
+MedGemma according to `report_decompose.default.json`. A report that does not
+state Histologic Type is valid and does not emit that DxItem.
 
-- `prepare_case_list.py`: B manifest → canonical CaseList batch.
-- `table_parsers.py`: VGHTC/CGMH report and WSI filename/layout adapters.
-- `xlsx_reader.py`: dependency-free XLSX record reader.
-- `report_decompose.py`: one normalized case → one schema-valid D.
-- `report_extraction.py`: hospital routing and Regex/MedGemma fallback.
-- `medgemma_extractor.py`: MedGemma loading, chunking, prompting, JSON parsing.
-- `histologic_type_classifier.py`: seven-class Histologic Type normalization.
-- `reference_data.py`: loads only mounted Person A reference files and records
-  SHA-256 provenance.
-- `configs/report_decompose.default.json`: production extraction behavior and
-  logical asset paths.
-
-## Data and mount layout
+## Data layout
 
 ```text
 lab_20/
-├── WLW_GPintegrate/                  # Git repository and image build context
-├── reference/person_a/template_ref/ # candidates; read-only at runtime
+├── WLW_GPintegrate/                  # repository and image build context
+├── reference/person_a/template_ref/ # read-only candidates/mappings
 └── run/                              # inputs, outputs, cache, logs
 ```
 
-Patient reports and WSI files remain outside Git and outside the image. They
-may be mounted at `/data/reports:ro`; the B manifest refers to the mounted table
-location, and CaseList stains store matching container-visible WSI paths.
+Reports and WSI files remain outside Git and the image. Mount them read-only,
+for example at `/data/reports`. The B manifest points to mounted table files;
+CaseList stains contain the corresponding container-visible WSI paths.
 
-## Production sequence
+## Run
 
-1. Put the B manifest under `run/input/`.
-2. Run `prepare_case_list` once to create `run/input/pipeline/cases.json`.
-3. Let `pipeline/run_pipeline.py` split the batch into one case per directory.
-4. For each case, run `report_decompose` and write one D.
+Create the multi-case CaseList:
 
 ```bash
 python -m components.person_a.prepare_case_list \
   --input ../run/input/B_report_tables.json \
   --output ../run/input/pipeline/cases.json \
   --config components/person_a/configs/report_decompose.default.json
+```
 
+Run the repository contract demo. This command demonstrates fan-out but uses
+the checked-in example configs for all components:
+
+```bash
 python pipeline/run_pipeline.py \
   --case-list ../run/input/pipeline/cases.json \
   --literature ../run/input/pipeline/A_literature.json \
   --artifacts ../run/output/pipeline
 ```
 
-VGHTC always uses the original Regex path. CGMH uses Regex and then MedGemma
-according to the configured fallback rules. A report that truly does not state
-Histologic Type is valid; no Histologic Type DxItem is emitted.
+Run one case directly:
 
-## Docker example on Windows PowerShell
+```bash
+python -m components.person_a.report_decompose \
+  --input ../run/input/pipeline/case-001.json \
+  --output ../run/output/work/D_dx_pairs.json \
+  --config components/person_a/configs/report_decompose.default.json
+```
 
-PowerShell uses the backtick for line continuation:
+## Docker on Windows PowerShell
 
 ```powershell
 docker run --rm --gpus all `
@@ -83,18 +76,16 @@ docker run --rm --gpus all `
   --config /app/components/person_a/configs/report_decompose.default.json
 ```
 
-Do not append a backslash after a PowerShell line. The output is always under
-the host sibling `run/` because `/run` is a bind mount.
+Replace host paths with local paths. Do not append a backslash after a
+PowerShell backtick. D is written to the host `run/` mount.
 
 ## Acceptance checks
 
 - CaseList input passes `case_list_input.schema.json` and contains one case at
   the Report Decompose boundary.
 - D passes `D_dx_pairs.schema.json`.
-- `case_id`, block IDs, stain IDs, stain types, filenames, and filepaths are
-  preserved.
-- `referenceBlock`, `referenceType`, and `referenceWSI` agree with the selected
-  source stains.
-- Invalid input/reference/model failures exit non-zero without partial D.
-- No report, WSI, model, candidate table, token, cache, or output is committed
-  or copied into the image.
+- Case, block, stain, WSI identity, and filepaths are preserved.
+- `referenceBlock`, `referenceType`, and `referenceWSI` match the selected stains.
+- Invalid input, reference, or model failures exit non-zero without a partial D.
+- No report, WSI, model, token, cache, or output is committed or copied into the
+  image.
