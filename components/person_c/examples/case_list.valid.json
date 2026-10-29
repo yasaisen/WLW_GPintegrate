@@ -1,0 +1,42 @@
+{
+  "DxItem_list": [
+    "Example_Diagnostic_Item"
+  ],
+  "case_list": [
+    {
+      "sample_idx": 0,
+      "case_id": "example-c-001",
+      "hospital": "EXAMPLE",
+      "patient_info": {},
+      "date": "",
+      "source": {
+        "fixture": "synthetic"
+      },
+      "organ": "Breast",
+      "report_raw_content": "Synthetic report text for the person_c example.",
+      "tissue_blocks": [
+        {
+          "block_id": "A",
+          "stains": [
+            {
+              "stain_id": "example-c-001-he",
+              "stain_type": "HE",
+              "filename": "example-he.svs",
+              "filepath": "/example/example-he.svs",
+              "memo": "processed (HE)"
+            },
+            {
+              "stain_id": "example-c-001-ihc",
+              "stain_type": "IHC",
+              "filename": "example-ihc.svs",
+              "filepath": "/example/example-ihc.svs",
+              "memo": "not processed (stain_types=[HE])"
+            }
+          ],
+          "memo": ""
+        }
+      ],
+      "memo": ""
+    }
+  ]
+}
