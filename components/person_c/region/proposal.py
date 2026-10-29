@@ -89,15 +89,11 @@ def propose_regions(wsi_path: str, cfg: Mapping[str, Any]) -> list[dict[str, Any
     base_idx, base_feat, base_patch = field_feats[0]
     feat = _select(base_idx, base_feat)
 
-    valid_grid = np.zeros(Hg * Wg, dtype=bool)
-    valid_grid[common] = True
-    mu_grid = np.zeros((Hg * Wg, feat.shape[1]), dtype=np.float16)
-    mu_grid[common] = feat
-    surrounding, _ = partition_mod.surrounding_pool(
-        mu_grid, valid_grid, Wg, Hg, radius=int(cfg["radius"]), device=device
+    surrounding = partition_mod.surrounding_pool_sparse(
+        feat, common, Wg, Hg, radius=int(cfg["radius"]), device=device
     )
 
-    blocks = [feat.astype(np.float32), surrounding[common].astype(np.float32)]
+    blocks = [feat.astype(np.float32), surrounding.astype(np.float32)]
     if cfg["use_patch"]:
         blocks.append(_select(base_idx, base_patch).astype(np.float32))
     for idx_full, feat_full, _ in field_feats[1:]:
@@ -105,9 +101,24 @@ def propose_regions(wsi_path: str, cfg: Mapping[str, Any]) -> list[dict[str, Any
     if int(cfg["pca_dim"]) > 0:
         blocks = [partition_mod.pca_reduce(b, int(cfg["pca_dim"])) for b in blocks]
 
+    # Clustering keeps every feature channel on the GPU.  The CONCH model is
+    # idle during that stage but is needed again for zero-shot cluster naming,
+    # so offload it temporarily rather than competing with the vMF chunks for
+    # VRAM.  This changes placement only, not weights or inference behavior.
+    if device.type == "cuda":
+        model.to("cpu")
+        torch.cuda.empty_cache()
+    print(
+        f"[proposal] vMF clustering: cells={common.size} "
+        f"channels={[block.shape[1] for block in blocks]}",
+        flush=True,
+    )
     labels, _ = partition_mod.cluster_vmf_multichannel(
         blocks, K=K, seed=int(cfg["seed"]), device=device
     )
+    if device.type == "cuda":
+        model.to(device).eval()
+        torch.cuda.empty_cache()
 
     vocab = zeroshot_mod.vocab_config(cfg["vocab"])
     cat_names, cluster_dominant = zeroshot_mod.classify_clusters(

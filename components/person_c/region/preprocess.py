@@ -144,6 +144,43 @@ def spline_weight_grid(grid_eff):
     return torch.from_numpy(w2)
 
 
+def _normalise_accumulator_chunks(accumulator, counts, keep_index, chunk_rows=8192):
+    """Materialise weighted means without duplicating a WSI-sized GPU tensor.
+
+    Boolean-indexing the complete accumulator creates another full float32
+    tensor before it can be copied to the host.  On a 24 GB GPU the two
+    accumulators fit, but that final temporary does not.  Keep the same
+    weighted-mean and NumPy L2-normalisation math while transferring bounded
+    row chunks directly into the final float16 host array.
+    """
+
+    rows = int(keep_index.numel())
+    result = np.empty((rows, accumulator.shape[1]), dtype=np.float16)
+    for start in range(0, rows, chunk_rows):
+        stop = min(start + chunk_rows, rows)
+        selected = keep_index[start:stop]
+        block_t = accumulator.index_select(0, selected)
+        block_t.div_(counts.index_select(0, selected).unsqueeze(1))
+        block = block_t.cpu().numpy()
+        norm = np.linalg.norm(block, axis=1, keepdims=True)
+        np.maximum(norm, 1e-12, out=norm)
+        np.divide(block, norm, out=block)
+        result[start:stop] = block.astype(np.float16)
+        del block_t, block
+    return result
+
+
+def _requires_two_pass_accumulators(
+    n_cells, need_patch, free_bytes, safety_bytes=1 << 30
+):
+    """Select two GPU passes when both float32 sums cannot safely coexist."""
+
+    if not need_patch:
+        return False
+    accumulator_bytes = int(n_cells) * (512 + 768 + 1) * 4
+    return accumulator_bytes + int(safety_bytes) > int(free_bytes)
+
+
 class _CropDataset(Dataset):
     """Reads a native_px x native_px (level-0 coordinate space) field of
     view at each lattice coord, but from whichever PYRAMID LEVEL actually
@@ -340,8 +377,24 @@ def extract_features(wsi_path, model, preprocess, device, field=1024, mag=20.0,
     comp_dev = torch.from_numpy(comp).to(device)
     ok_dev = torch.from_numpy(ok).to(device)
     cell_weight = spline_weight_grid(grid).to(device)
+    two_pass = False
+    if device.type == "cuda":
+        free_bytes, _total_bytes = torch.cuda.mem_get_info(device)
+        two_pass = _requires_two_pass_accumulators(
+            cells.size, need_patch, free_bytes
+        )
+    print(
+        "[preprocess] accumulator strategy="
+        f"{'two_pass_gpu' if two_pass else 'joint_gpu'}",
+        flush=True,
+    )
+
     sum_t = torch.zeros(cells.size, 512, device=device)
-    sum_t_patch = torch.zeros(cells.size, 768, device=device) if need_patch else None
+    sum_t_patch = (
+        torch.zeros(cells.size, 768, device=device)
+        if need_patch and not two_pass
+        else None
+    )
     cnt_t = torch.zeros(cells.size, device=device)
 
     extractor = MaskclipExtractor(model, grid)
@@ -349,7 +402,6 @@ def extract_features(wsi_path, model, preprocess, device, field=1024, mag=20.0,
                                       read_level=read_level, read_size=read_size),
                          batch_size=batch_size, shuffle=False,
                          num_workers=num_workers, pin_memory=pin_memory)
-    idx0 = 0
     n_batches = math.ceil(len(coords) / batch_size)
     # Split "waiting on the DataLoader" (CPU: openslide read_region + JPEG
     # decode + resize + collate, across num_workers processes) from
@@ -357,42 +409,71 @@ def extract_features(wsi_path, model, preprocess, device, field=1024, mag=20.0,
     # without this split, a batch/worker-count tweak that changes
     # wall-clock time gives no way to tell whether it helped the real
     # bottleneck or made it worse.
-    t_wait = 0.0
-    t_compute = 0.0
-    t_mark = time.time()
-    for bi, (imgs, X, Y) in enumerate(loader):
-        t_wait += time.time() - t_mark
-        if bi % 20 == 0:
-            gpu_alloc = torch.cuda.memory_allocated(device) / 1e9 if device.type == "cuda" else 0.0
-            print(f"[preprocess] batch {bi}/{n_batches} RSS={_rss_gb():.2f}GB "
-                  f"gpu_alloc={gpu_alloc:.2f}GB t_wait={t_wait:.1f}s t_compute={t_compute:.1f}s", flush=True)
-        t0 = time.time()
-        B = imgs.shape[0]
-        imgs = imgs.to(device, non_blocking=True)
-        raw, raw_patch = extractor(imgs)          # [B, grid*grid, 512] / [B, grid*grid, 768], on device
-        comp_b = comp_dev[idx0:idx0 + B].reshape(-1)
-        ok_b = ok_dev[idx0:idx0 + B].reshape(-1)
-        idx0 += B
-        raw_flat = raw.reshape(-1, raw.shape[-1]).float()
-        comp_ok = comp_b[ok_b]
-        wsel = cell_weight.repeat(B)[ok_b]
-        sum_t.index_add_(0, comp_ok, raw_flat[ok_b] * wsel[:, None])
-        if need_patch:
-            raw_patch_flat = raw_patch.reshape(-1, raw_patch.shape[-1]).float()
-            sum_t_patch.index_add_(0, comp_ok, raw_patch_flat[ok_b] * wsel[:, None])
-        cnt_t.index_add_(0, comp_ok, wsel)
-        if device.type == "cuda":
-            torch.cuda.synchronize(device)
-        t_compute += time.time() - t0
+    def run_accumulation(pass_name, accumulate_mask, accumulate_patch):
+        idx0 = 0
+        t_wait = 0.0
+        t_compute = 0.0
         t_mark = time.time()
+        for bi, (imgs, X, Y) in enumerate(loader):
+            t_wait += time.time() - t_mark
+            if bi % 20 == 0:
+                gpu_alloc = (
+                    torch.cuda.memory_allocated(device) / 1e9
+                    if device.type == "cuda"
+                    else 0.0
+                )
+                print(
+                    f"[preprocess:{pass_name}] batch {bi}/{n_batches} "
+                    f"RSS={_rss_gb():.2f}GB gpu_alloc={gpu_alloc:.2f}GB "
+                    f"t_wait={t_wait:.1f}s t_compute={t_compute:.1f}s",
+                    flush=True,
+                )
+            t0 = time.time()
+            B = imgs.shape[0]
+            imgs = imgs.to(device, non_blocking=True)
+            raw, raw_patch = extractor(imgs)
+            comp_b = comp_dev[idx0:idx0 + B].reshape(-1)
+            ok_b = ok_dev[idx0:idx0 + B].reshape(-1)
+            idx0 += B
+            comp_ok = comp_b[ok_b]
+            wsel = cell_weight.repeat(B)[ok_b]
+            if accumulate_mask:
+                raw_flat = raw.reshape(-1, raw.shape[-1]).float()
+                sum_t.index_add_(
+                    0, comp_ok, raw_flat[ok_b] * wsel[:, None]
+                )
+                cnt_t.index_add_(0, comp_ok, wsel)
+            if accumulate_patch:
+                raw_patch_flat = raw_patch.reshape(
+                    -1, raw_patch.shape[-1]
+                ).float()
+                sum_t_patch.index_add_(
+                    0, comp_ok, raw_patch_flat[ok_b] * wsel[:, None]
+                )
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            t_compute += time.time() - t0
+            del imgs, raw, raw_patch, comp_b, ok_b, comp_ok, wsel
+            if accumulate_mask:
+                del raw_flat
+            if accumulate_patch:
+                del raw_patch_flat
+            t_mark = time.time()
 
-    print(f"[preprocess] extraction loop done, RSS={_rss_gb():.2f}GB "
-          f"t_wait(data)={t_wait:.1f}s t_compute={t_compute:.1f}s", flush=True)
-    keep_t = cnt_t > 1e-6
-    feat = (sum_t[keep_t] / cnt_t[keep_t].unsqueeze(1)).cpu().numpy()
-    nrm = np.linalg.norm(feat, axis=1, keepdims=True)
-    np.maximum(nrm, 1e-12, out=nrm)
-    feat = (feat / nrm).astype(np.float16)
+        print(
+            f"[preprocess:{pass_name}] extraction loop done, "
+            f"RSS={_rss_gb():.2f}GB t_wait(data)={t_wait:.1f}s "
+            f"t_compute={t_compute:.1f}s",
+            flush=True,
+        )
+
+    run_accumulation("joint" if not two_pass else "mask", True, need_patch and not two_pass)
+    keep_index = torch.nonzero(cnt_t > 1e-6, as_tuple=False).squeeze(1)
+    keep_np = keep_index.cpu().numpy()
+    feat = _normalise_accumulator_chunks(sum_t, cnt_t, keep_index)
+    del sum_t
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
 
     # patch: same weighted-mean-then-L2-normalise treatment as maskclip's
     # `feat` above -- the reference's own on-disk cache keeps patch raw/
@@ -401,14 +482,24 @@ def extract_features(wsi_path, model, preprocess, device, field=1024, mag=20.0,
     # unit-norm per channel same as any other channel, so it gets
     # normalised here rather than carried raw (see MaskclipExtractor).
     if need_patch:
-        feat_patch = (sum_t_patch[keep_t] / cnt_t[keep_t].unsqueeze(1)).cpu().numpy()
-        nrm_patch = np.linalg.norm(feat_patch, axis=1, keepdims=True)
-        np.maximum(nrm_patch, 1e-12, out=nrm_patch)
-        feat_patch = (feat_patch / nrm_patch).astype(np.float16)
+        if two_pass:
+            sum_t_patch = torch.zeros(cells.size, 768, device=device)
+            run_accumulation("patch", False, True)
+        feat_patch = _normalise_accumulator_chunks(
+            sum_t_patch, cnt_t, keep_index
+        )
+        del sum_t_patch
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
     else:
         feat_patch = np.zeros((0, 768), dtype=np.float16)
 
-    idx = cells[keep_t.cpu().numpy()]
+    idx = cells[keep_np]
+    print(
+        f"[preprocess] host features ready, rows={idx.size} "
+        f"RSS={_rss_gb():.2f}GB",
+        flush=True,
+    )
 
     mpp_x = slide.properties.get("openslide.mpp-x")
     return {"idx": idx, "feat": feat, "feat_patch": feat_patch, "Hg": Hg, "Wg": Wg, "cell_px": cell,

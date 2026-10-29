@@ -1,18 +1,20 @@
-name: interest_pattern_extraction
+name: person_c_interest_pattern
 owner: person_C
-version: 0.4.0
+version: 0.1.0
 inputs: [CaseListInput@1.0]
 outputs: [E.ROIs@2.0]
 runtime:
-  python: "3.10"
+  python: "3.12"
+  cuda: "13.0"
+  min_nvidia_driver: "580"   # CUDA 13.0 requirement; older drivers need a CUDA 12.x base (README section 7)
   gpu: true
-  cuda_runtime: "11.8 via PyTorch 2.6.0 wheel"
-  minimum_vram_gb: 8
-  cpu: 4
-  memory_gb: 16
-  timeout_seconds: 21600
+  gpu_count_min: 1
+  vram_gb_min: 24        # lab_23 RTX 4090: joint peak 23.06 GB allocated; large WSI auto-selects two-pass accumulation
+  cpu: 8                 # job used 8 CPUs
+  memory_gb: 64          # measured peak RSS 45.7 GB (61879x70581 slide), 10.9 GB (28777x34620)
+  timeout_seconds: null  # 5 min 4 s (61879x70581) and 73 s (28777x34620) measured; larger slides not measured
 models:
-  - name: central-breast-mrcps
-    revision: sha256:1f8aa23202e4efda656b227efa1114cea74036f79f6dd0deba20f50bde90b12b
-    configured_by: configs/default.json:model.path
+  - name: conch_ViT-B-16
+    configured_by: configs/region_proposal.json:region.conch_checkpoint
 entrypoint: python -m components.person_c.interest_pattern
+status: integration_validated   # production region_proposal completed the three-case lab_23 Docker pipeline

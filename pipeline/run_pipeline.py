@@ -44,16 +44,16 @@ PROFILES = {
     "production": {
         "report_decompose": ROOT / "components/person_a/configs/report_decompose.default.json",
         "knowledge_retrieval": ROOT / "components/person_b/configs/dense.default.json",
-        "query_generation": ROOT / "components/person_a/configs/query_generation.default.json",
-        "interest_pattern": ROOT / "components/person_c/configs/default.json",
-        "visual_filter": ROOT / "components/person_d/configs/native.example.json",
+        "query_generation": ROOT / "components/person_a/configs/query_generation.production.json",
+        "interest_pattern": ROOT / "components/person_c/configs/region_proposal.json",
+        "visual_filter": ROOT / "components/person_d/configs/native.json",
         "clee": ROOT / "components/person_e/configs/native.json",
     },
     "example": {
         "report_decompose": ROOT / "components/person_a/configs/example.json",
         "knowledge_retrieval": ROOT / "components/person_b/configs/example.json",
         "query_generation": ROOT / "components/person_a/configs/example.json",
-        "interest_pattern": ROOT / "components/person_c/configs/demo.json",
+        "interest_pattern": ROOT / "components/person_c/configs/example.json",
         "visual_filter": ROOT / "components/person_d/configs/example.json",
         "clee": ROOT / "components/person_e/configs/default.json",
     },
@@ -63,37 +63,37 @@ COMPONENTS = {
     "report_decompose": {
         "module": "components.person_a.report_decompose",
         "image_env": "WLW_IMAGE_PERSON_A",
-        "image": "wlw/person-a:lab22-integrated",
+        "image": "wlw/person-a:0.9.0-lab23-production",
         "gpu": False,
     },
     "interest_pattern": {
         "module": "components.person_c.interest_pattern",
         "image_env": "WLW_IMAGE_PERSON_C",
-        "image": "wlw/person-c:0.4.0-final-20261027",
+        "image": "wlw/person-c:0.1.0-lab23-production",
         "gpu": True,
     },
     "knowledge_retrieval": {
         "module": "components.person_b.knowledge_retrieval",
         "image_env": "WLW_IMAGE_PERSON_B",
-        "image": "wlw/person-b:final-main-42ce738",
+        "image": "wlw/person-b:0.5.0-lab23-production",
         "gpu": True,
     },
     "query_generation": {
         "module": "components.person_a.query_generation",
         "image_env": "WLW_IMAGE_PERSON_A",
-        "image": "wlw/person-a:lab22-integrated",
+        "image": "wlw/person-a:0.9.0-lab23-production",
         "gpu": True,
     },
     "visual_filter": {
         "module": "components.person_d.visual_filter",
         "image_env": "WLW_IMAGE_PERSON_D",
-        "image": "wlw/person-d:lab22-integrated",
+        "image": "wlw/person-d:0.2.0-lab23-production",
         "gpu": True,
     },
     "clee": {
         "module": "components.person_e.clee",
         "image_env": "WLW_IMAGE_PERSON_E",
-        "image": "wlw/person-e:final-main-42ce738",
+        "image": "wlw/person-e:1.1.0-lab23-production",
         "gpu": True,
     },
 }
@@ -113,8 +113,51 @@ def _container_run_path(path: Path) -> str:
 
 def _container_config_path(path: Path) -> str:
     resolved = path.resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"Component config does not exist: {resolved}")
     relative = resolved.relative_to(ROOT.resolve())
     return "/app/" + relative.as_posix()
+
+
+def _load_profile_configs(profile: str) -> dict[str, Path]:
+    """Validate host-side configs before starting any component container."""
+
+    configs = PROFILES[profile]
+    documents: dict[str, dict] = {}
+    for stage, path in configs.items():
+        if not path.is_file():
+            raise FileNotFoundError(f"{profile} config for {stage} is missing: {path}")
+        documents[stage] = json.loads(path.read_text(encoding="utf-8"))
+
+    if profile == "production":
+        checks = {
+            "knowledge_retrieval": documents["knowledge_retrieval"].get("mode") == "dense",
+            "query_generation": (
+                documents["query_generation"].get("backend", {}).get("mode")
+                == "learnable_soft_prompt"
+                and documents["query_generation"].get("backend", {}).get(
+                    "device_map_strategy"
+                )
+                == "single_device"
+                and documents["query_generation"].get("backend", {}).get(
+                    "retry_with_canonical_dx"
+                )
+                is True
+            ),
+            "interest_pattern": documents["interest_pattern"].get("mode") == "region_proposal",
+            "visual_filter": (
+                documents["visual_filter"].get("mode") == "native"
+                and documents["visual_filter"].get("matching", {}).get("enable") is True
+            ),
+            "clee": documents["clee"].get("backend", {}).get("mode") == "native",
+        }
+        invalid = sorted(stage for stage, valid in checks.items() if not valid)
+        if invalid:
+            raise ValueError(
+                "Production profile contains a non-production or bypass config for: "
+                + ", ".join(invalid)
+            )
+    return configs
 
 
 def _resolve_source_wsi(raw_path: str, case_list_path: Path) -> Path:
@@ -348,7 +391,7 @@ def main() -> None:
     if args.profile == "production" and executor != "docker":
         raise ValueError("The production profile requires --executor docker")
 
-    configs = PROFILES[args.profile]
+    configs = _load_profile_configs(args.profile)
     case_list_path = resolve_run_path(args.case_list)
     literature = resolve_run_path(args.literature)
     artifacts = resolve_run_path(args.artifacts)

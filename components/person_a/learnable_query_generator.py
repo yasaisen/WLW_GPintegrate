@@ -146,9 +146,13 @@ def parse_strict_json_object(text: str) -> dict[str, Any]:
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError as exc:
+        context_start = max(0, exc.pos - 80)
+        context_end = min(len(stripped), exc.pos + 80)
+        context = stripped[context_start:context_end]
         raise LearnableQueryGenerationError(
             f"Model response is not strict JSON: {exc.msg} "
-            f"at line {exc.lineno} column {exc.colno}"
+            f"at line {exc.lineno} column {exc.colno}; "
+            f"response context={context!r}"
         ) from exc
     if not isinstance(parsed, dict):
         raise LearnableQueryGenerationError(
@@ -301,6 +305,7 @@ class LearnableSoftPromptGenerator:
         self._soft_prompt: Any = None
         self._soft_prompt_len: int | None = None
         self._device: str | None = None
+        self.last_generation_diagnostics: dict[str, Any] = {}
 
     def _dtype(self, torch: Any, device: str) -> Any:
         if self.dtype_name == "auto":
@@ -580,6 +585,13 @@ class LearnableSoftPromptGenerator:
         generated_text = tokenizer.decode(
             generated_ids[0], skip_special_tokens=True
         )
+        self.last_generation_diagnostics = {
+            "response_sha256": hashlib.sha256(
+                generated_text.encode("utf-8")
+            ).hexdigest(),
+            "response_chars": len(generated_text),
+            "generated_tokens": int(generated_ids.shape[-1]),
+        }
         generated = parse_strict_json_object(generated_text)
         validate_generated_attributes(
             generated,

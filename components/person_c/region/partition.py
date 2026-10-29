@@ -64,7 +64,8 @@ def _cat_chunk_norm(Xs, i, j):
     (never the full-N concat) -- avoids the OOM the reference hit on a
     large multiscale-UNI WSI (see reference docstring for the incident)."""
     xb = torch.cat([X[i:j].float() for X in Xs], dim=1)
-    return xb / xb.norm(dim=1, keepdim=True).clamp_min(1e-8)
+    xb.div_(xb.norm(dim=1, keepdim=True).clamp_min(1e-8))
+    return xb
 
 
 def _spherical_kmeans(Xs, K, device, iters=15, seed=42, chunk=1_000_000):
@@ -153,17 +154,12 @@ class VMFMixtureMultiChannel:
         self.sinkhorn_epsilon, self.sinkhorn_iters = sinkhorn_epsilon, sinkhorn_iters
         self.qtype = torch.float16 if device.type == "cuda" else torch.float32
         self.mu = self.kappa = self.log_pi = None
-        # 16384 (the reference's own default) was tuned to bound memory for
-        # a LARGE K (the (chunk, K) intermediate is what actually needs
-        # bounding) -- at our K in the single/low double digits, that
-        # intermediate is trivial regardless of chunk size, so the small
-        # default just means far more Python-loop/kernel-launch round trips
-        # than necessary. Measured (2026-09-10, K=8, N=6.37M): 389 chunks x
-        # up to 100 EM iterations ~= 39k small GPU calls, ~500s wall clock
-        # for what should be a GPU-memory-cheap computation. 1M default
-        # cuts that to ~7 chunks/iteration; still bounded (not a full N
-        # single shot) so it stays safe if K or N grows a lot later.
-        self._CHUNK = chunk or 1_000_000
+        # All channels stay resident as float16 tensors.  A one-million-row
+        # float32 concat needs 6.68 GiB for the production 512+512+768
+        # channels and OOMs a 24 GB GPU even though the resident tensors fit.
+        # 65,536 rows bounds that concat below 0.5 GiB; the math and row order
+        # are unchanged, only the number of kernel launches differs.
+        self._CHUNK = chunk or 65_536
 
     def _logresp(self, Xs, mu, kappa, log_pi, logC):
         N = Xs[0].shape[0]
@@ -181,7 +177,13 @@ class VMFMixtureMultiChannel:
     def fit(self, blocks_np):
         Xs = [torch.tensor(b, dtype=self.qtype, device=self.device) for b in blocks_np]
         N = Xs[0].shape[0]
-        Ccat = _spherical_kmeans(Xs, self.K, self.device, seed=self.seed)
+        Ccat = _spherical_kmeans(
+            Xs,
+            self.K,
+            self.device,
+            seed=self.seed,
+            chunk=self._CHUNK,
+        )
         a = torch.empty(N, dtype=torch.long, device=self.device)
         for i in range(0, N, self._CHUNK):
             j = min(i + self._CHUNK, N)
@@ -356,6 +358,80 @@ def surrounding_pool(mu_grid, valid_grid, Wg, Hg, radius, device=None, mem_budge
     has_flat = has_neighbours.reshape(-1)
     surrounding[~has_flat] = 0.0
     return surrounding.astype(np.float16), has_flat
+
+
+def surrounding_pool_sparse(feat, flat_idx, Wg, Hg, radius, device, chunk=8192):
+    """Neighbour mean for valid cells without a dense ``H*W*D`` host grid.
+
+    Whole-slide grids can contain tens of millions of locations while only a
+    few million tissue cells are valid.  The former implementation expanded
+    the compact features to the entire grid, which can require more than
+    80 GB for one large MRXS.  A dense int32 position lookup is sufficient:
+    feature rows remain compact and each valid cell gathers only its
+    ``(2*radius+1)^2 - 1`` neighbours.  The returned row order matches
+    ``flat_idx`` and the averaging/L2-normalisation semantics are unchanged.
+    """
+
+    feat = np.asarray(feat)
+    flat_idx = np.asarray(flat_idx, dtype=np.int64)
+    if feat.shape[0] != flat_idx.size:
+        raise ValueError("surrounding_pool_sparse feature/index lengths differ")
+    if flat_idx.size == 0:
+        return np.empty_like(feat, dtype=np.float16)
+
+    if device.type != "cuda":
+        dense = np.zeros((int(Hg) * int(Wg), feat.shape[1]), dtype=np.float16)
+        valid = np.zeros(int(Hg) * int(Wg), dtype=bool)
+        dense[flat_idx] = feat
+        valid[flat_idx] = True
+        pooled, _ = surrounding_pool(dense, valid, Wg, Hg, radius, device=None)
+        return pooled[flat_idx]
+
+    total = int(Hg) * int(Wg)
+    position = np.full(total, -1, dtype=np.int32)
+    position[flat_idx] = np.arange(flat_idx.size, dtype=np.int32)
+    position_t = torch.from_numpy(position).to(device)
+    index_t = torch.from_numpy(flat_idx).to(device)
+    feat_t = torch.from_numpy(np.ascontiguousarray(feat)).to(device)
+    result = np.empty(feat.shape, dtype=np.float16)
+    offsets = [
+        (dy, dx)
+        for dy in range(-radius, radius + 1)
+        for dx in range(-radius, radius + 1)
+        if dy or dx
+    ]
+
+    for start in range(0, flat_idx.size, chunk):
+        stop = min(start + chunk, flat_idx.size)
+        if start % (chunk * 64) == 0:
+            print(
+                f"[surrounding] rows {start}/{flat_idx.size}",
+                flush=True,
+            )
+        current = index_t[start:stop]
+        y = torch.div(current, int(Wg), rounding_mode="floor")
+        x = current - y * int(Wg)
+        accum = torch.zeros(stop - start, feat.shape[1], device=device)
+        count = torch.zeros(stop - start, device=device)
+        for dy, dx in offsets:
+            ny, nx = y + dy, x + dx
+            inside = (ny >= 0) & (ny < int(Hg)) & (nx >= 0) & (nx < int(Wg))
+            neighbour_flat = (ny.clamp(0, int(Hg) - 1) * int(Wg)
+                              + nx.clamp(0, int(Wg) - 1))
+            neighbour_pos = position_t[neighbour_flat]
+            present = inside & (neighbour_pos >= 0)
+            if present.any():
+                accum[present] += feat_t[neighbour_pos[present].long()].float()
+                count[present] += 1.0
+        has_neighbours = count > 0
+        accum[has_neighbours] /= count[has_neighbours].unsqueeze(1)
+        accum = accum / accum.norm(dim=1, keepdim=True).clamp_min(1e-12)
+        accum[~has_neighbours] = 0.0
+        result[start:stop] = accum.to(torch.float16).cpu().numpy()
+
+    del feat_t, index_t, position_t
+    torch.cuda.empty_cache()
+    return result
 
 
 def knn_pool(feat, k=8, n_landmarks=20000, device=None, seed=42, chunk=8192):

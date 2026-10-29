@@ -10,9 +10,9 @@
 |---|---|---|
 | Person A | 0.9.0 | Report Decomposition / Query Generation |
 | Person B | 0.5.0 | Literature Preparation / Dense Retrieval |
-| Person C | 0.4.0 | MRCPS WSI Interest Pattern Extraction |
+| Person C | 0.1.0 | CONCH + vMF WSI Interest Pattern Extraction |
 | Person D | 0.2.0 | PLIP + CONCH Visual Attribute Extraction / Matching |
-| Person E | 依現行 component.yaml | CLEE Evidence Selection |
+| Person E | 1.1.0 | CLEE Evidence Selection |
 
 各元件已有獨立的研究實作與測試覆蓋。2026-10-29 已以 RTX 4090、各元件 Docker 映像、
 真實 MRXS 與 sibling `reference/` 外部資產完成三案例正式端到端驗收；修正內容、正式設定、
@@ -78,7 +78,7 @@ manifest；目前主 pipeline 的元件邊界從已正規化的 CaseList 開始�
 `reference/` 與 `run/` 必須和專案目錄位於同一層。`contracts/paths.py` 會檢查這些邊界：
 
 ```text
-lab_20/
+lab_23/
 ├── WLW_GPintegrate/                 # 程式碼、schema、Dockerfile、測試與非敏感 config
 │   ├── components/
 │   │   ├── person_a/
@@ -236,6 +236,11 @@ python3 pipeline/run_pipeline.py --profile example
 python3 pipeline/run_prepare_literature.py
 python3 pipeline/run_pipeline.py
 ```
+
+目前 production profile 固定使用 Person A `learnable_soft_prompt`（單卡完整載入、無 CPU
+offload）、Person B dense retrieval、Person C `region_proposal`、Person D `native.json` 且
+matching 開啟，以及 Person E native CLEE。2026-10-29 的三案例正式執行結果與逐案限制記錄於
+[`INTEGRATION_EXECUTION_REPORT.zh-TW.md`](INTEGRATION_EXECUTION_REPORT.zh-TW.md)。
 
 ## 8. README 與版本資訊
 

@@ -22,7 +22,7 @@ assets:
     size_bytes: 605241933
     license_or_access_policy: "Not declared on the Hugging Face model card; confirm before use or redistribution"
     contains_phi: false
-    configured_by: "configs/native.example.json:extraction.plip (weight_path, sha256, support_files_sha256)"
+    configured_by: "configs/native.json:extraction.plip (weight_path, sha256, support_files_sha256)"
 
   - asset_id: conch-vit-b-16
     type: model_weight
@@ -36,7 +36,7 @@ assets:
     size_bytes: 802235437
     license_or_access_policy: "CC BY-NC-ND 4.0; gated access"
     contains_phi: false
-    configured_by: "configs/native.example.json:extraction.conch.checkpoint_path"
+    configured_by: "configs/native.json:extraction.conch.checkpoint_path"
 
   - asset_id: conch-vit-b-16-smoke-random
     type: model_weight
@@ -63,7 +63,7 @@ assets:
     size_bytes: 18859
     license_or_access_policy: "Authored by person_D for this project; Apache-2.0 (repository LICENSE)"
     contains_phi: false
-    configured_by: "configs/native.example.json:extraction.prompts_path"
+    configured_by: "configs/native.json:extraction.prompts_path"
 
   - asset_id: person-d-criteria-label-map
     type: template
@@ -75,7 +75,7 @@ assets:
     size_bytes: 738
     license_or_access_policy: "Authored by person_D for this project; Apache-2.0 (repository LICENSE)"
     contains_phi: false
-    configured_by: "configs/native.example.json:matching.label_map_path"
+    configured_by: "configs/native.json:matching.label_map_path"
 
   - asset_id: person-d-roi-analysis-examples
     type: template
@@ -96,4 +96,4 @@ assets:
       tree_sha256: "188b5fe0698cb2e5cbe48c24d2e4cc0923864dd76adb5d10cfe71fc81e32cbce"
     license_or_access_policy: "Copyrighted IARC/WHO publication; shared only in the project's restricted reference-asset folder for internal research and testing; must not be passed on, committed, or included in the image"
     contains_phi: false
-    configured_by: "configs/native.example.json:extraction.example_dir"
+    configured_by: "configs/native.json:extraction.example_dir"

@@ -4,6 +4,9 @@ from collections import defaultdict
 from copy import deepcopy
 from typing import Any
 
+from components.person_a.learnable_query_generator import (
+    LearnableQueryGenerationError,
+)
 from components.person_a.reference_data import (
     load_histologic_mapping,
     load_visual_references,
@@ -207,6 +210,7 @@ def generate_artifact(
 
     query_index = 1
     learnable_provenance: dict[str, Any] | None = None
+    learnable_generation_attempts: list[dict[str, Any]] = []
     selected_chunks_by_dx_pair: dict[str, list[dict[str, Any]]] = {}
     for dx_item, record in dx_items(payload).items():
         record["visualAttrQueries"] = []
@@ -243,7 +247,63 @@ def generate_artifact(
             if generator is None:
                 generator = _learnable_generator(backend_config)
             dx_text = record.get("DxResultRawTxt") or record["DxResultTxt"]
-            generated = generator.generate(dx_text, used_chunks)
+            retry_with_canonical_dx = bool(
+                backend_config.get("retry_with_canonical_dx", False)
+            )
+            try:
+                generated = generator.generate(dx_text, used_chunks)
+            except LearnableQueryGenerationError as first_error:
+                first_diagnostics = deepcopy(
+                    getattr(generator, "last_generation_diagnostics", {})
+                )
+                learnable_generation_attempts.append(
+                    {
+                        "dx_pair_id": record["dx_pair_id"],
+                        "input_strategy": "raw_dx_text",
+                        "status": "rejected",
+                        **first_diagnostics,
+                        "error": str(first_error).split(
+                            "; response context=", 1
+                        )[0],
+                    }
+                )
+                canonical_dx_text = str(mapped_result or "").strip()
+                if (
+                    not retry_with_canonical_dx
+                    or not canonical_dx_text
+                    or canonical_dx_text == str(dx_text).strip()
+                ):
+                    raise
+                generated = generator.generate(canonical_dx_text, used_chunks)
+                learnable_generation_attempts.append(
+                    {
+                        "dx_pair_id": record["dx_pair_id"],
+                        "input_strategy": "canonical_mapped_dx",
+                        "status": "accepted",
+                        **deepcopy(
+                            getattr(
+                                generator,
+                                "last_generation_diagnostics",
+                                {},
+                            )
+                        ),
+                    }
+                )
+            else:
+                learnable_generation_attempts.append(
+                    {
+                        "dx_pair_id": record["dx_pair_id"],
+                        "input_strategy": "raw_dx_text",
+                        "status": "accepted",
+                        **deepcopy(
+                            getattr(
+                                generator,
+                                "last_generation_diagnostics",
+                                {},
+                            )
+                        ),
+                    }
+                )
             criteria = _merge_learned_attributes(
                 criteria,
                 generated,
@@ -280,6 +340,12 @@ def generate_artifact(
         )
         learnable_provenance["selected_chunks_by_dx_pair"] = (
             selected_chunks_by_dx_pair
+        )
+        learnable_provenance["canonical_dx_retry_enabled"] = bool(
+            backend_config.get("retry_with_canonical_dx", False)
+        )
+        learnable_provenance["generation_attempts"] = (
+            learnable_generation_attempts
         )
         payload["reference_versions"][
             "learnable_query_generation"

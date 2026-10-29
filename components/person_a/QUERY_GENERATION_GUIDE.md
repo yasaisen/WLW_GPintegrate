@@ -26,6 +26,11 @@ conditions is rejected before G is written.
 Schema-valid F is not itself a guarantee of usable evidence or valid model
 output. Generic/uninformative chunk text can produce malformed generations;
 the runtime rejects them without repairing JSON or writing a partial artifact.
+The production profile may then rerun the same verified model, soft prompt and
+chunks with the canonical mapped diagnosis instead of the raw report phrase.
+The rejected and accepted attempts, response hashes and input strategies are
+recorded under `reference_versions.learnable_query_generation.generation_attempts`.
+This is a model retry, not a reference-backend fallback.
 The local-delivery smoke uses three known ADH chunks from the mounted fixed
 reference vocabulary to check execution, not retrieval/generalization quality.
 

@@ -8,6 +8,14 @@
   it predicts one of six condition labels for every canonical visual option.
   The checked-in profile uses CPU offload for low-memory GPUs; an HPC runtime
   config may set `device_map_strategy` to `single_device`.
+- `query_generation.production.json`: the production pipeline profile for a
+  24 GB GPU. It uses the same pinned Gemma and Stage 2 soft prompt with
+  `device_map_strategy: single_device`; no token limit or model behavior is
+  reduced relative to `query_generation.learnable.json`. Strictly invalid
+  generations are rejected; when enabled, `retry_with_canonical_dx` retries
+  with the already-verified histologic mapping target and records both attempts
+  (including response hashes) in G provenance. It never falls back to the
+  deterministic reference backend.
 - `query_generation.single_device.json`: the same pinned model and soft prompt,
   placing the whole model on one GPU. Used by the reproducible delivery smoke
   test; sufficient free VRAM is required. It keeps dtype `auto`.

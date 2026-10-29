@@ -3,9 +3,13 @@
 `example.json` (`mode: example`) is the contract-only stub used by the repository pipeline test. It
 contains no WSI setting, model or prompt path, threshold, or device choice and runs no model.
 
-`native.example.json` (`mode: native`) runs PLIP + CONCH visual attribute extraction and the matching
-filter. Reference paths must stay below sibling `reference/person_d/`; ROI crops and relative WSI paths
-resolve below sibling `run/`. Weights load from local files only.
+`native.json` is the production profile. It runs PLIP + CONCH visual attribute extraction and enables
+the matching filter. Reference paths must stay below sibling `reference/person_d/`; ROI crops and
+relative WSI paths resolve below sibling `run/`. Weights load from local files only.
+
+`native.example.json` uses the same official models and extraction assets but deliberately sets
+`matching.enable=false` so downstream integration fixtures can exercise Person E. It is not a
+production profile and must not be selected by the no-argument pipeline.
 
 `native.smoke.json` is identical except that CONCH points to random-initialised `conch_ViT-B-16`
 weights. It exercises the complete native path (OpenSlide, both models, matching) on a clean machine

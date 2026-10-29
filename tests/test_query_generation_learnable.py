@@ -325,6 +325,84 @@ class LearnableQueryGenerationTest(unittest.TestCase):
             selection["selected_chunks_by_dx_pair"]["case-001-dx-001"],
         )
 
+    def test_learnable_backend_retries_invalid_output_with_canonical_dx(self) -> None:
+        class RecoveringGenerator(FakeLearnableGenerator):
+            def __init__(self) -> None:
+                super().__init__()
+                self.last_generation_diagnostics = {}
+
+            def generate(self, dx_text: str, chunks: list[dict]) -> dict:
+                self.calls.append(
+                    (dx_text, [chunk["chunk_id"] for chunk in chunks])
+                )
+                if dx_text == "Focal atypical ductal hyperplasia":
+                    self.last_generation_diagnostics = {
+                        "response_sha256": "1" * 64,
+                        "response_chars": 4096,
+                        "generated_tokens": 768,
+                    }
+                    raise LearnableQueryGenerationError(
+                        "Model response is not strict JSON; response context='omitted'"
+                    )
+                self.last_generation_diagnostics = {
+                    "response_sha256": "2" * 64,
+                    "response_chars": 2048,
+                    "generated_tokens": 512,
+                }
+                return {
+                    "Cellular_and_Nuclear": {
+                        "Cell_Pleomorphism": {
+                            "Monomorphic": "Must_True",
+                            "Pleomorphic": "Not_Mentioned",
+                        },
+                        "Polarity": {
+                            "Maintained": "High_Possibly_True",
+                            "Lost": "Must_False",
+                        },
+                    }
+                }
+
+        with tempfile.TemporaryDirectory(dir=PERSON_A_REFERENCE) as temp_dir:
+            config = {
+                "component_version": "person-a/query-generation:0.7.0",
+                "asset_integrity": "record_only",
+                **_write_references(Path(temp_dir)),
+                "backend": {
+                    "mode": "learnable_soft_prompt",
+                    "required_chunk_count": 3,
+                    "retry_with_canonical_dx": True,
+                },
+            }
+            generator = RecoveringGenerator()
+            artifact = generate_artifact(
+                _d_artifact(), _f_artifact(), config, generator=generator
+            )
+
+        validate_artifact(artifact, "G.VisualAttributeQueries")
+        self.assertEqual(
+            [
+                "Focal atypical ductal hyperplasia",
+                "Atypical ductal hyperplasia",
+            ],
+            [call[0] for call in generator.calls],
+        )
+        provenance = artifact["payload"]["reference_versions"][
+            "learnable_query_generation"
+        ]
+        self.assertTrue(provenance["canonical_dx_retry_enabled"])
+        self.assertEqual(
+            ["rejected", "accepted"],
+            [attempt["status"] for attempt in provenance["generation_attempts"]],
+        )
+        self.assertEqual(
+            "canonical_mapped_dx",
+            provenance["generation_attempts"][1]["input_strategy"],
+        )
+        self.assertNotIn(
+            "response context",
+            provenance["generation_attempts"][0]["error"],
+        )
+
     def test_learnable_backend_fails_when_f_has_fewer_than_three_chunks(self) -> None:
         with tempfile.TemporaryDirectory(dir=PERSON_A_REFERENCE) as temp_dir:
             config = {
