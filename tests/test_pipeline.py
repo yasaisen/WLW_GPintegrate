@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from contracts.metadata import iter_rois
 from contracts.paths import RUN_ROOT
@@ -20,6 +23,106 @@ FIXTURE = ROOT / "integration/fixtures/input/cases.example.json"
 
 
 class ContractExamplePipelineTest(unittest.TestCase):
+    def test_only_learnable_query_generation_failures_are_skippable(self) -> None:
+        error = subprocess.CalledProcessError(
+            1,
+            ["python", "-m", "components.person_a.query_generation"],
+            output=(
+                "Traceback\n"
+                "components.person_a.learnable_query_generator."
+                "LearnableQueryGenerationError: schema drift\n"
+            ),
+        )
+
+        self.assertEqual(
+            "schema drift",
+            run_pipeline._learnable_query_generation_reason(
+                "query_generation", error
+            ),
+        )
+        self.assertIsNone(
+            run_pipeline._learnable_query_generation_reason(
+                "knowledge_retrieval", error
+            )
+        )
+        error.output = "RuntimeError: CUDA out of memory\n"
+        self.assertIsNone(
+            run_pipeline._learnable_query_generation_reason(
+                "query_generation", error
+            )
+        )
+
+    def test_pipeline_skips_learnable_error_and_continues_next_case(self) -> None:
+        source = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        second_case = json.loads(json.dumps(source["case_list"][0]))
+        second_case["sample_idx"] = 1
+        second_case["case_id"] = "example-case-2"
+        source["case_list"].append(second_case)
+        validate_case_list_input(source)
+        WORK.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory(dir=WORK) as temp_dir:
+            run_dir = Path(temp_dir)
+            case_list = run_dir / "cases.json"
+            artifacts = run_dir / "artifacts"
+            case_list.write_text(
+                json.dumps(source, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            def fake_run_component(stage, inputs, output, config, **kwargs):
+                if (
+                    stage == "query_generation"
+                    and output.parent.name == "example-case"
+                ):
+                    raise subprocess.CalledProcessError(
+                        1,
+                        ["python", "-m", "components.person_a.query_generation"],
+                        output=(
+                            "components.person_a.learnable_query_generator."
+                            "LearnableQueryGenerationError: schema drift\n"
+                        ),
+                    )
+                return {"stage": stage, "elapsed_seconds": 0.01}
+
+            argv = [
+                str(ROOT / "pipeline/run_pipeline.py"),
+                "--profile",
+                "example",
+                "--case-list",
+                str(case_list),
+                "--literature",
+                str(run_dir / "unused-literature.json"),
+                "--artifacts",
+                str(artifacts),
+            ]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(
+                    run_pipeline,
+                    "run_component",
+                    side_effect=fake_run_component,
+                ),
+                redirect_stdout(io.StringIO()),
+            ):
+                run_pipeline.main()
+
+            manifest = json.loads(
+                (artifacts / "run_manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                ["example-case-2"],
+                [item["case_id"] for item in manifest["completed_cases"]],
+            )
+            self.assertEqual(1, len(manifest["skipped_cases"]))
+            self.assertEqual(
+                "example-case", manifest["skipped_cases"][0]["case_id"]
+            )
+            self.assertEqual(
+                "query_generation",
+                manifest["skipped_cases"][0]["failed_stage"],
+            )
+
     def test_production_profile_uses_real_backends_without_matching_bypass(self) -> None:
         documents = {
             stage: json.loads(path.read_text(encoding="utf-8"))
@@ -130,6 +233,7 @@ class ContractExamplePipelineTest(unittest.TestCase):
                 (artifacts / "run_manifest.json").read_text(encoding="utf-8")
             )
             self.assertEqual(1, len(manifest["completed_cases"]))
+            self.assertEqual([], manifest["skipped_cases"])
             self.assertEqual("example-case", manifest["completed_cases"][0]["case_id"])
             self.assertEqual(
                 "cases/example-case/case_input.json",
