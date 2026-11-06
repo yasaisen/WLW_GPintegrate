@@ -27,6 +27,32 @@ STAGE = "visual_attributes_matching_filter"
 NATIVE_BACKEND = "plip+conch"
 
 
+def _reject_legacy_condition_provenance(payload: Mapping[str, Any]) -> None:
+    """Prevent pre-isolation G artifacts from re-entering inference."""
+
+    references = payload.get("reference_versions", {})
+    if not isinstance(references, Mapping):
+        return
+    learned = references.get("learnable_query_generation", {})
+    legacy = "type_level_visual_attrs" in references or (
+        isinstance(learned, Mapping) and "attribute_reference" in learned
+    )
+    if legacy:
+        raise ValueError(
+            "G provenance predates the condition-free inference template; "
+            "regenerate G before running Person D"
+        )
+    condition_free = isinstance(
+        references.get("visual_attribute_template"), Mapping
+    )
+    example_stub = isinstance(references.get("example_query_stub"), Mapping)
+    if not condition_free and not example_stub:
+        raise ValueError(
+            "G provenance does not establish a condition-free inference "
+            "template; regenerate G before running Person D"
+        )
+
+
 def _producer(config: dict[str, Any]) -> str:
     producer = config.get("component_version")
     if config.get("mode") != "example" or not isinstance(producer, str) or not producer:
@@ -211,6 +237,7 @@ def validate_inputs(e_artifact: dict[str, Any], g_artifact: dict[str, Any]) -> s
     accept or reject the same E/G pair.
     """
 
+    _reject_legacy_condition_provenance(g_artifact["payload"])
     case_id = ensure_same_case(e_artifact, g_artifact)
     e_mode, g_mode = e_artifact["payload"]["data_mode"], g_artifact["payload"]["data_mode"]
     if e_mode != g_mode:

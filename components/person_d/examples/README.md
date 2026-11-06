@@ -7,7 +7,7 @@
 |---|---|
 | `E_rois.valid.json` | case `case-001`；`case-001-he`（參考切片，指向 `synthetic_slide.tiff`）與 `case-001-er`（非參考切片）各 2 個 ROI |
 | `E_rois.empty.valid.json` | 同一 case，所有 stain 皆無 ROI |
-| `G_queries.valid.json` | `Histologic_Type`：真實 criteria 的 `case-001-query-001` 與合成驗收 query `case-001-query-004`（所有選項 High_Possibly_True）、`case-001-query-005`（所有選項 Low_Possibly_True）；`Microcalcification`：真實 criteria 的 `case-001-query-002` 與合成 unmapped query `case-001-query-003`；`referenceWSI` 皆為 `case-001-he` |
+| `G_queries.valid.json` | 完全合成的 criteria fixtures：`query-001`／`002` 驗證 Must condition；`query-004` 將可確認選項設為 High_Possibly_True；`query-005` 設為 Low_Possibly_True；`query-003` 為 unmapped。|
 | `synthetic_slide.tiff` | OpenSlide generic tiled TIFF，33792 × 19968 px，mpp 0.5；只有兩個 HE ROI 範圍內有程式產生的仿 H&E 紋理，其餘為白底；SHA-256 `a1f9c031b72c67308a860e24ba3f1a6fa2a04e00564a6990322ba47e22eb3d30` |
 | `H_matches.expected.json` | `example` 模式完整預期輸出（逐內容比對） |
 | `H_matches.empty.expected.json` | `native` 模式、空 ROI case 的完整預期輸出；不載入模型（逐內容比對） |
@@ -21,7 +21,7 @@
 |---|---|---|
 | selected | 兩個 HE ROI 的 `query-004` | 固定 `selected`／`visual_attributes_match` |
 | rejected | 兩個 HE ROI 的 `query-005` | 固定 `rejected`／`score_below_threshold` |
-| 真實 criteria（無法驗證的 Must 條件） | 兩個 HE ROI 的 `query-001`、`query-002` | 不可能 `selected`：`skipped`／`insufficient_visual_evidence` 或 `rejected`／`must_condition_failed`（實測：he-roi-001 為前者，he-roi-002 為後者） |
+| 合成 Must criteria | 兩個 HE ROI 的 `query-001`、`query-002` | 不可能 `selected`：`skipped`／`insufficient_visual_evidence` 或 `rejected`／`must_condition_failed`（實測：he-roi-001 為前者，he-roi-002 為後者） |
 | 非 reference WSI（skipped） | `case-001-er` 的所有 ROI × 所有 query | 固定 `skipped`／`stain_not_in_reference_wsi`，每個 query 一筆並帶 `query_id` |
 | unmapped query（skipped） | `case-001-query-003` | 固定 `skipped`／`query_unmapped` |
 | 空 ROI case | `E_rois.empty.valid.json` | 逐內容比對 |
@@ -29,21 +29,18 @@
 `query-004`、`query-005` 的 criteria 由 `query-001` 衍生：每個屬性的選項分別全設為 High_Possibly_True
 或 Low_Possibly_True（`Unable to confirm` 設為 Not_Mentioned），沒有任何 Must_True／Must_False。只要兩個
 模型在至少一個屬性上達成共識（`min_evaluated_attributes` = 1），score 就分別是 1 與 -1，結果與模型
-預測的是哪個標籤無關；實測每個 HE ROI 有 5–6 個共識屬性。`query-001`、`query-002` 的真實 criteria
-（Invasive Carcinoma）有 4 個 Must_False 選項是 vocabulary 無法預測的（`Pattern` 的
-`Absent, No special pattern`、`Simple Tubular/Branching Structures`，`Epithelial_Cell_Shape` 的 `Bilayered`，
-`Endoluminal_Secretion` 的 `Physiological`；見 `components/person_d/MAPPING.md`），這些 Must 條件無法驗證，
-因此這兩個 query 不會 `selected`。各分支以假模型做的確定性覆蓋另見 `components/person_d/tests/`。
+預測的是哪個標籤無關；實測每個 HE ROI 有 5–6 個共識屬性。`query-001`、`query-002`
+使用專為 matching 測試設計的合成 condition matrix；其中包含刻意設置的不可達
+`Must_False` 與三個 `Must_True` 屬性。這些值不是任何診斷類別的 ground truth。
+各分支以假模型做的確定性覆蓋另見 `components/person_d/tests/`。
 
 ## 來源與去識別化
 
 - E 取自丙提供的合成樣本：移除 `roiCase` schema 不允許的 `structured_report`，並將 `case-001-he`
   的 `filename`／`filepath` 改指向合成切片。
-- G 取自甲提供的樣本。病理號、日期、報告原文、WSI 檔名與路徑已移除；case metadata 與 E 相同，
-  `dx_pair_id`、`query_id`、`referenceWSI` 改為 `case-001` 命名。`diagnosticCriteria`、
-  `candidateReference` 維持原樣；`case-001-query-003`、`case-001-query-004`、`case-001-query-005` 為合成。
-- E、G `reference_versions` 的 `source_path` 原為產生者工作站的絕對路徑，改為
-  `example://<source_name>`；`source_name` 與 `sha256` 維持原樣。
+- G 的 visual attribute 結構來自 condition-free inference template；所有
+  `diagnosticCriteria.conditions`、case metadata、ID 與 provenance 均為合成 fixture，
+  不含或引用診斷 ground truth。
 - 合成切片由程式產生，不含任何影像來源或 PHI。
 
 ## 執行

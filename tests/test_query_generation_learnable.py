@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import hashlib
 from pathlib import Path
 import tempfile
 import unittest
 
 from components.person_a.learnable_query_generator import (
+    CONDITION_LABELS,
     LearnableQueryGenerationError,
-    load_attribute_reference,
     parse_strict_json_object,
     validate_generated_attributes,
 )
@@ -36,8 +35,8 @@ class FakeLearnableGenerator:
             },
             "checkpoint_name": "soft_prompt_condition_best.pt",
             "checkpoint_sha256": "abc123",
-            "attribute_reference": {
-                "source_name": "chunks_with_attribute_condition.json",
+            "visual_attribute_template": {
+                "source_name": "visual_attribute_template.json",
                 "sha256": "def456",
             },
             "required_chunk_count": 3,
@@ -57,13 +56,6 @@ class FakeLearnableGenerator:
                 },
             }
         }
-
-
-class ForbiddenGenerator:
-    provenance = {"checkpoint_sha256": "must-not-be-used"}
-
-    def generate(self, dx_text: str, chunks: list[dict]) -> dict:
-        raise AssertionError("reference backend must not invoke the model")
 
 
 def _d_artifact() -> dict:
@@ -161,7 +153,10 @@ def _f_artifact(count: int = 3) -> dict:
 
 
 def _write_references(root: Path) -> dict:
-    candidate = {
+    template = {
+        "version": "1.2.1",
+        "type": "visualAttributeTemplate",
+        "conditionLabels": sorted(CONDITION_LABELS),
         "visualAttrs": {
             "Cellular_and_Nuclear": {
                 "Cell_Pleomorphism": {
@@ -177,53 +172,20 @@ def _write_references(root: Path) -> dict:
             }
         }
     }
-    criteria = [
-        {
-            "version": "1.0.0",
-            "type": "diagnosticCriteria",
-            "includeReferences": [],
-            "typeLevel_idx": 0,
-            "DxItem": "Histologic_Type",
-            "DxResult": "Atypical ductal hyperplasia",
-            "attrConditions": ["Must_True", "Not_Mentioned"],
-            "optionTypes": ["nominal"],
-            "visualAttrs": {
-                "Cellular_and_Nuclear": {
-                    "Cell_Pleomorphism": {
-                        "type": "nominal",
-                        "options": ["Monomorphic", "Pleomorphic"],
-                        "conditions": {
-                            "Monomorphic": "High_Possibly_True",
-                            "Pleomorphic": "Must_False",
-                        },
-                    },
-                    "Polarity": {
-                        "type": "ordinal",
-                        "options": ["Maintained", "Lost"],
-                        "conditions": {
-                            "Maintained": "High_Possibly_True",
-                            "Lost": "Must_False",
-                        },
-                    },
-                }
-            },
-        }
-    ]
     mapping = {
         "Histologic_Type_mappingTable": {
-            "ADH": "Atypical ductal hyperplasia"
+            "ADH": {
+                "DxResult": "Atypical ductal hyperplasia",
+                "typeLevel_idx": 0,
+            }
         }
     }
     paths = {
-        "candidate_reference_path": root / "candidateReference.json",
-        "type_level_path": root / "typeLevel.json",
+        "visual_attribute_template_path": root / "visual_attribute_template.json",
         "histologic_mapping_path": root / "mapping.json",
     }
-    paths["candidate_reference_path"].write_text(
-        json.dumps(candidate), encoding="utf-8"
-    )
-    paths["type_level_path"].write_text(
-        json.dumps(criteria), encoding="utf-8"
+    paths["visual_attribute_template_path"].write_text(
+        json.dumps(template), encoding="utf-8"
     )
     paths["histologic_mapping_path"].write_text(
         json.dumps(mapping), encoding="utf-8"
@@ -232,7 +194,7 @@ def _write_references(root: Path) -> dict:
 
 
 class LearnableQueryGenerationTest(unittest.TestCase):
-    def test_reference_backend_keeps_fixture_path_model_free(self) -> None:
+    def test_condition_reference_backend_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory(dir=PERSON_A_REFERENCE) as temp_dir:
             config = {
                 "component_version": "person-a/query-generation:0.7.0",
@@ -240,22 +202,10 @@ class LearnableQueryGenerationTest(unittest.TestCase):
                 **_write_references(Path(temp_dir)),
                 "backend": {"mode": "reference"},
             }
-            artifact = generate_artifact(
-                _d_artifact(),
-                _f_artifact(count=1),
-                config,
-                generator=ForbiddenGenerator(),
-            )
-
-        validate_artifact(artifact, "G.VisualAttributeQueries")
-        query = dx_items(artifact["payload"])["Histologic_Type"][
-            "visualAttrQueries"
-        ][0]
-        self.assertEqual("mapped", query["criteria_status"])
-        self.assertEqual(["case-001-chunk-001"], query["chunk_ids"])
-        self.assertNotIn(
-            "learnable_query_generation", artifact["payload"]["reference_versions"]
-        )
+            with self.assertRaisesRegex(
+                ValueError, "no condition-reference fallback"
+            ):
+                generate_artifact(_d_artifact(), _f_artifact(count=1), config)
 
     def test_learnable_backend_produces_valid_g_and_uses_three_chunks(self) -> None:
         with tempfile.TemporaryDirectory(dir=PERSON_A_REFERENCE) as temp_dir:
@@ -311,6 +261,7 @@ class LearnableQueryGenerationTest(unittest.TestCase):
         selection = artifact["payload"]["reference_versions"][
             "learnable_query_generation"
         ]
+        self.assertEqual("model_generation_only", selection["condition_source"])
         self.assertEqual(generator.provenance["model_integrity"], selection["model_integrity"])
         self.assertEqual(
             "ascending_retrieval_rank_top_n",
@@ -428,7 +379,10 @@ class LearnableQueryGenerationTest(unittest.TestCase):
                 "component_version": "person-a/query-generation:0.7.0",
                 "asset_integrity": "record_only",
                 **_write_references(Path(temp_dir)),
-                "backend": {"mode": "reference"},
+                "backend": {
+                    "mode": "learnable_soft_prompt",
+                    "required_chunk_count": 3,
+                },
             }
 
             duplicate_rank = _f_artifact()
@@ -448,7 +402,7 @@ class LearnableQueryGenerationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "absent from D"):
                 generate_artifact(_d_artifact(), foreign, config)
 
-    def test_attribute_reference_and_strict_json_validation(self) -> None:
+    def test_template_based_strict_json_validation(self) -> None:
         attributes = {
             "Category": {
                 "Feature": {
@@ -458,40 +412,15 @@ class LearnableQueryGenerationTest(unittest.TestCase):
                 "Other": {"Seen": "Low_Possibly_True"},
             }
         }
-        other_attributes = {
-            "Category": {
-                "Feature": {
-                    "Present": "Not_Mentioned",
-                    "Absent": "Must_True",
-                },
-                "Other": {"Seen": "Negligible"},
-            }
-        }
-
-        def reference_entry(text: str, attribute: dict) -> dict:
-            return {
-                "text": text,
-                "attribute": attribute,
-                "attribute_condition_metadata": {
-                    "target_format": "chunk_visual_attribute_option_conditions_v2",
-                    "typelevel_sha256": "a" * 64,
-                    "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                },
-            }
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            path = Path(temp_dir) / "chunks.json"
-            path.write_text(
-                json.dumps(
-                    [
-                        reference_entry("first", attributes),
-                        reference_entry("second", other_attributes),
-                    ]
-                ),
-                encoding="utf-8",
+        template = json.loads(json.dumps(attributes))
+        allowed = {
+            path: set(CONDITION_LABELS)
+            for path in (
+                "Category.Feature.Present",
+                "Category.Feature.Absent",
+                "Category.Other.Seen",
             )
-            template, allowed, provenance = load_attribute_reference(path)
-
+        }
         generated = parse_strict_json_object(json.dumps(attributes))
         validate_generated_attributes(generated, template, allowed)
         self.assertEqual(
@@ -504,11 +433,6 @@ class LearnableQueryGenerationTest(unittest.TestCase):
                 "Not_Mentioned",
             },
             allowed["Category.Feature.Present"],
-        )
-        self.assertEqual("chunks.json", provenance["source_name"])
-        self.assertEqual(
-            "chunk_visual_attribute_option_conditions_v2",
-            provenance["target_format"],
         )
         with self.assertRaises(LearnableQueryGenerationError):
             parse_strict_json_object("```json\n{}\n```")

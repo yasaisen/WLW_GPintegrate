@@ -14,7 +14,6 @@ D and F must share `case_id`. F chunks are joined to a diagnosis by
 ## Backends
 
 - `example`: deterministic public contract fixture.
-- `reference`: map Histologic Type to mounted type-level visual criteria.
 - `learnable_soft_prompt`: run Gemma with the mounted Stage 2 `.pt`; use exactly
   three F chunks for each mapped Histologic Type.
 
@@ -30,9 +29,9 @@ The production profile may then rerun the same verified model, soft prompt and
 chunks with the canonical mapped diagnosis instead of the raw report phrase.
 The rejected and accepted attempts, response hashes and input strategies are
 recorded under `reference_versions.learnable_query_generation.generation_attempts`.
-This is a model retry, not a reference-backend fallback.
-The local-delivery smoke uses three known ADH chunks from the mounted fixed
-reference vocabulary to check execution, not retrieval/generalization quality.
+This is a model retry. There is no condition-reference fallback.
+The local-delivery smoke uses three condition-free ADH evidence texts from a
+dedicated smoke asset to check execution, not retrieval/generalization quality.
 
 ## Required external files
 
@@ -43,9 +42,8 @@ reference/person_a/
 │   └── soft_prompt_stage2_64SP_50epoch_chunk_option_conditions_retrieval_mixed_best.pt
 └── template_ref/
     ├── Histologic_Type_mappingTable.json
-    ├── candidateReference.json
-    ├── [typeLevel]visualAttrs_v1.2.1_2603241656.json
-    └── chunks_with_attribute_condition.json
+    ├── visual_attribute_template_v1.2.1.json
+    └── query_generation_smoke_evidence.json
 ```
 
 Mount `reference/` at `/reference:ro`. The configured `model_path` is
@@ -64,16 +62,6 @@ duplicate rank within one DxPair, or a chunk whose `dx_pair_id` is absent from
 D is rejected. G records the selected IDs and ranks in provenance.
 
 ## Run without Docker
-
-Reference backend:
-
-```bash
-python -m components.person_a.query_generation \
-  --input ../run/output/work/D_dx_pairs.json \
-  --input ../run/output/work/F_chunks.json \
-  --output ../run/output/work/G_queries.json \
-  --config components/person_a/configs/query_generation.default.json
-```
 
 Learned backend:
 
@@ -95,7 +83,7 @@ docker run --rm --gpus all --network none \
   -v "$(pwd)/../reference:/reference:ro" \
   -v "$(pwd)/../run:/run" \
   --entrypoint python \
-  wlw/person-a:0.9.0 \
+  wlw/person-a:0.10.0 \
   -m components.person_a.query_generation \
   --input /run/output/work/D_dx_pairs.json \
   --input /run/output/work/F_chunks.json \

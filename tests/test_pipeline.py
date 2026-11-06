@@ -23,7 +23,7 @@ FIXTURE = ROOT / "integration/fixtures/input/cases.example.json"
 
 
 class ContractExamplePipelineTest(unittest.TestCase):
-    def test_only_learnable_query_generation_failures_are_skippable(self) -> None:
+    def test_only_explicit_case_errors_are_skippable(self) -> None:
         error = subprocess.CalledProcessError(
             1,
             ["python", "-m", "components.person_a.query_generation"],
@@ -35,21 +35,31 @@ class ContractExamplePipelineTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            "schema drift",
-            run_pipeline._learnable_query_generation_reason(
-                "query_generation", error
-            ),
+            ("LearnableQueryGenerationError", "schema drift"),
+            run_pipeline._skippable_case_error("query_generation", error),
         )
         self.assertIsNone(
-            run_pipeline._learnable_query_generation_reason(
-                "knowledge_retrieval", error
-            )
+            run_pipeline._skippable_case_error("knowledge_retrieval", error)
         )
+
+        error.output = (
+            "torch.OutOfMemoryError: CUDA out of memory. "
+            "Tried to allocate 9.70 GiB.\n"
+        )
+        self.assertEqual(
+            (
+                "torch.OutOfMemoryError",
+                "CUDA out of memory. Tried to allocate 9.70 GiB.",
+            ),
+            run_pipeline._skippable_case_error("interest_pattern", error),
+        )
+        self.assertIsNone(
+            run_pipeline._skippable_case_error("visual_filter", error)
+        )
+
         error.output = "RuntimeError: CUDA out of memory\n"
         self.assertIsNone(
-            run_pipeline._learnable_query_generation_reason(
-                "query_generation", error
-            )
+            run_pipeline._skippable_case_error("interest_pattern", error)
         )
 
     def test_pipeline_skips_learnable_error_and_continues_next_case(self) -> None:

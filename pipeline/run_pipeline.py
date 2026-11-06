@@ -67,7 +67,7 @@ COMPONENTS = {
     "report_decompose": {
         "module": "components.person_a.report_decompose",
         "image_env": "WLW_IMAGE_PERSON_A",
-        "image": "wlw/person-a:0.9.0-lab23-production",
+        "image": "wlw/person-a:0.10.0-lab23-production",
         "gpu": False,
     },
     "interest_pattern": {
@@ -85,7 +85,7 @@ COMPONENTS = {
     "query_generation": {
         "module": "components.person_a.query_generation",
         "image_env": "WLW_IMAGE_PERSON_A",
-        "image": "wlw/person-a:0.9.0-lab23-production",
+        "image": "wlw/person-a:0.10.0-lab23-production",
         "gpu": True,
     },
     "visual_filter": {
@@ -107,7 +107,15 @@ STRUCTURED_REPORT_RAW_TEXT_PLACEHOLDER = (
     "Structured report supplied; raw report unavailable."
 )
 PARENTHETICAL_ABBREVIATION = re.compile(r"\(([A-Za-z][A-Za-z0-9_-]*)\)\s*$")
-LEARNABLE_QUERY_GENERATION_ERROR = "LearnableQueryGenerationError:"
+SKIPPABLE_CASE_ERROR_MARKERS = {
+    "interest_pattern": (
+        ("torch.OutOfMemoryError:", "torch.OutOfMemoryError"),
+        ("torch.cuda.OutOfMemoryError:", "torch.cuda.OutOfMemoryError"),
+    ),
+    "query_generation": (
+        ("LearnableQueryGenerationError:", "LearnableQueryGenerationError"),
+    ),
+}
 
 
 def _case_directory_name(case_id: str) -> str:
@@ -548,17 +556,19 @@ def _run_logged(command: list[str], log: TextIO) -> None:
         )
 
 
-def _learnable_query_generation_reason(
+def _skippable_case_error(
     stage: str,
     error: subprocess.CalledProcessError,
-) -> str | None:
-    """Return the model-generation error message when this case is skippable."""
+) -> tuple[str, str] | None:
+    """Return ``(error_type, reason)`` for explicitly skippable case errors."""
 
-    if stage != "query_generation" or not isinstance(error.output, str):
+    markers = SKIPPABLE_CASE_ERROR_MARKERS.get(stage, ())
+    if not markers or not isinstance(error.output, str):
         return None
     for line in reversed(error.output.splitlines()):
-        if LEARNABLE_QUERY_GENERATION_ERROR in line:
-            return line.split(LEARNABLE_QUERY_GENERATION_ERROR, 1)[1].strip()
+        for marker, error_type in markers:
+            if marker in line:
+                return error_type, line.split(marker, 1)[1].strip()
     return None
 
 
@@ -783,13 +793,14 @@ def main() -> None:
                         external_wsi_mounts=external_wsi_mounts,
                     )
                 except subprocess.CalledProcessError as exc:
-                    reason = _learnable_query_generation_reason(stage, exc)
-                    if reason is None:
+                    skip_error = _skippable_case_error(stage, exc)
+                    if skip_error is None:
                         raise
+                    error_type, reason = skip_error
                     skipped_record = {
                         "case_id": case_id,
                         "failed_stage": stage,
-                        "error_type": "LearnableQueryGenerationError",
+                        "error_type": error_type,
                         "reason": reason,
                         "case_input_path": case_input.relative_to(
                             artifacts
@@ -804,8 +815,8 @@ def main() -> None:
                     }
                     skipped_cases.append(skipped_record)
                     skip_message = (
-                        f"Skipping case {case_id}: query_generation raised "
-                        f"LearnableQueryGenerationError: {reason}"
+                        f"Skipping case {case_id}: {stage} raised "
+                        f"{error_type}: {reason}"
                     )
                     print(f"\n{skip_message}", flush=True)
                     log.write(skip_message + "\n")

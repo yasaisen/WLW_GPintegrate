@@ -177,7 +177,7 @@ class NativeVisualFilterTests(unittest.TestCase):
             event = decisions[(f"case-001-case-001-{roi}", f"case-001-dx-{dx}", f"case-001-query-{query}")]
             return event["status"], event["reason"]
 
-        # query-001 carries Must_True options on attributes the backend never extracts.
+        # Synthetic query-001 carries Must_True options on attributes not extracted here.
         self.assertEqual(("skipped", "insufficient_visual_evidence"), outcome("he-roi-001", "001", "001"))
         self.assertFalse(
             decisions[("case-001-case-001-he-roi-001", "case-001-dx-001", "case-001-query-001")]["selected"]
@@ -354,6 +354,29 @@ class NativeVisualFilterTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, message):
                 self._build(_FakeExtractor({}), e=e, g=g)
 
+    def test_legacy_condition_provenance_is_rejected_in_both_modes(self) -> None:
+        legacy_variants = (
+            {"type_level_visual_attrs": {"legacy": True}},
+            {"learnable_query_generation": {"attribute_reference": {"legacy": True}}},
+        )
+        for legacy in legacy_variants:
+            with self.subTest(legacy=legacy):
+                g = copy.deepcopy(self.g)
+                g["payload"]["reference_versions"].update(legacy)
+                with self.assertRaisesRegex(ValueError, "predates the condition-free"):
+                    build_example_artifact(
+                        self.e, g, "person-d/visual-filter:0.2.0"
+                    )
+                with self.assertRaisesRegex(ValueError, "predates the condition-free"):
+                    self._build(_FakeExtractor({}), g=g)
+
+        g = copy.deepcopy(self.g)
+        g["payload"]["reference_versions"] = {"unknown_source": {}}
+        with self.assertRaisesRegex(ValueError, "does not establish"):
+            build_example_artifact(self.e, g, "person-d/visual-filter:0.2.0")
+        with self.assertRaisesRegex(ValueError, "does not establish"):
+            self._build(_FakeExtractor({}), g=g)
+
     def test_criteria_option_the_vocabulary_cannot_reach_blocks_selection(self) -> None:
         vocabulary = _full_vocabulary(self.g)
         vocabulary["Architecture"]["Pattern"].remove("Simple Tubular/Branching Structures")
@@ -370,7 +393,7 @@ class NativeVisualFilterTests(unittest.TestCase):
                 continue
             events = {event["query_id"]: event for event in roi["selection_history"][1:]}
             matching = roi["visualAttrs_info"]["matching"]
-            # In the real criteria this option is Must_False, and the vocabulary cannot reach it.
+            # The synthetic fixture marks this unreachable option Must_False.
             self.assertEqual("skipped", events["case-001-query-001"]["status"])
             self.assertIn("Architecture.Pattern", matching["case-001-query-001"]["must_unverifiable"])
             # The synthetic queries carry no Must condition, so reachability does not affect them.

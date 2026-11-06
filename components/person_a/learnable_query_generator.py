@@ -11,7 +11,6 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
-from pathlib import Path
 from typing import Any
 
 from components.person_a.asset_integrity import verify_external_asset
@@ -19,7 +18,7 @@ from components.person_a.local_model_integrity import verify_local_model
 from contracts.paths import resolve_person_reference_path
 
 SOFT_PROMPT_MARKER = "<SOFT_PROMPT_INSERT>"
-TARGET_FORMAT = "chunk_visual_attribute_option_conditions_v2"
+TARGET_FORMAT = "visual_attribute_option_conditions_v3"
 CONDITION_LABELS = {
     "Must_True",
     "Must_False",
@@ -53,88 +52,6 @@ def _node_types(document: dict[str, Any], prefix: str = "") -> dict[str, str]:
         if isinstance(value, dict):
             types.update(_node_types(value, path))
     return types
-
-
-def load_attribute_reference(
-    path: str | Path,
-) -> tuple[dict[str, Any], dict[str, set[str]], dict[str, str]]:
-    """Load and validate the condition-annotated Stage 2 chunk reference."""
-
-    source = Path(path)
-    if not source.is_file():
-        raise FileNotFoundError(f"Attribute reference was not found: {source}")
-    raw = source.read_bytes()
-    chunks = json.loads(raw.decode("utf-8"))
-    if not isinstance(chunks, list) or not chunks:
-        raise LearnableQueryGenerationError(
-            "Attribute reference must be a non-empty JSON array"
-        )
-
-    attributes: list[dict[str, Any]] = []
-    typelevel_sha256: str | None = None
-    for index, item in enumerate(chunks):
-        if not isinstance(item, dict) or not isinstance(item.get("attribute"), dict):
-            raise LearnableQueryGenerationError(
-                f"Attribute reference entry {index} has no attribute object"
-            )
-        metadata = item.get("attribute_condition_metadata")
-        if not isinstance(metadata, dict):
-            raise LearnableQueryGenerationError(
-                f"Attribute reference entry {index} lacks condition metadata"
-            )
-        if metadata.get("target_format") != TARGET_FORMAT:
-            raise LearnableQueryGenerationError(
-                f"Attribute reference entry {index} is not {TARGET_FORMAT}"
-            )
-        entry_typelevel_sha256 = metadata.get("typelevel_sha256")
-        if not isinstance(entry_typelevel_sha256, str) or len(entry_typelevel_sha256) != 64:
-            raise LearnableQueryGenerationError(
-                f"Attribute reference entry {index} has invalid typelevel_sha256"
-            )
-        if typelevel_sha256 is None:
-            typelevel_sha256 = entry_typelevel_sha256
-        elif entry_typelevel_sha256 != typelevel_sha256:
-            raise LearnableQueryGenerationError(
-                "Attribute reference mixes different type-level revisions"
-            )
-        text = str(item.get("text", ""))
-        if metadata.get("text_sha256") != hashlib.sha256(text.encode("utf-8")).hexdigest():
-            raise LearnableQueryGenerationError(
-                f"Attribute reference entry {index} text hash does not match"
-            )
-        attributes.append(item["attribute"])
-
-    template = deepcopy(attributes[0])
-    expected_nodes = _node_types(template)
-    for index, attribute in enumerate(attributes):
-        if _node_types(attribute) != expected_nodes:
-            raise LearnableQueryGenerationError(
-                f"Attribute schema differs in reference entry {index}"
-            )
-
-    allowed = {leaf_path: set(CONDITION_LABELS) for leaf_path in _flatten(template)}
-    for index, attribute in enumerate(attributes):
-        for leaf_path, value in _flatten(attribute).items():
-            if not isinstance(value, str) or value not in CONDITION_LABELS:
-                raise LearnableQueryGenerationError(
-                    f"Attribute reference entry {index} has illegal condition "
-                    f"at {leaf_path}: {value!r}"
-                )
-
-    canonical_chunks = json.dumps(
-        chunks,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-
-    return template, allowed, {
-        "source_name": source.name,
-        "sha256": hashlib.sha256(raw).hexdigest(),
-        "target_format": TARGET_FORMAT,
-        "typelevel_sha256": str(typelevel_sha256),
-        "chunk_data_sha256": hashlib.sha256(canonical_chunks).hexdigest(),
-    }
 
 
 def parse_strict_json_object(text: str) -> dict[str, Any]:
@@ -235,7 +152,13 @@ def _user_text(dx_text: str, chunks: list[dict[str, Any]]) -> str:
 class LearnableSoftPromptGenerator:
     """Load Gemma and one learned prompt, then generate validated attributes."""
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(
+        self,
+        config: dict[str, Any],
+        *,
+        condition_schema: dict[str, Any],
+        template_provenance: dict[str, Any],
+    ):
         self.config = deepcopy(config)
         self.model_name = str(config["model_name"])
         self.model_revision = config.get("model_revision") or None
@@ -243,9 +166,17 @@ class LearnableSoftPromptGenerator:
         self.checkpoint_path = resolve_person_reference_path(
             "person_a", config["checkpoint_path"]
         )
-        self.attribute_reference_path = resolve_person_reference_path(
-            "person_a", config["attribute_reference_path"]
-        )
+        if not isinstance(condition_schema, dict) or not condition_schema:
+            raise ValueError("condition_schema must be a non-empty object")
+        template_sha256 = template_provenance.get("sha256")
+        if not isinstance(template_sha256, str) or len(template_sha256) != 64:
+            raise ValueError("template_provenance needs a SHA-256")
+        self.attribute_template = deepcopy(condition_schema)
+        self.allowed_values = {
+            leaf_path: set(CONDITION_LABELS)
+            for leaf_path in _flatten(self.attribute_template)
+        }
+        self.template_provenance = deepcopy(template_provenance)
         self.required_chunk_count = int(config.get("required_chunk_count", 3))
         self.asset_integrity = str(config.get("asset_integrity", "enforce"))
         self.max_input_len = int(config.get("max_input_len", 8192))
@@ -275,17 +206,6 @@ class LearnableSoftPromptGenerator:
             self.checkpoint_path,
             integrity_mode=self.asset_integrity,
         )
-        attribute_integrity = verify_external_asset(
-            self.attribute_reference_path,
-            integrity_mode=self.asset_integrity,
-        )
-
-        (
-            self.attribute_template,
-            self.allowed_values,
-            reference_provenance,
-        ) = load_attribute_reference(self.attribute_reference_path)
-        reference_provenance.update(attribute_integrity)
         self.provenance = {
             "backend": "learnable_soft_prompt",
             "model_name": self.model_name,
@@ -294,7 +214,7 @@ class LearnableSoftPromptGenerator:
             "checkpoint_name": self.checkpoint_path.name,
             "checkpoint_sha256": checkpoint_integrity["sha256"],
             "checkpoint_integrity": checkpoint_integrity,
-            "attribute_reference": reference_provenance,
+            "visual_attribute_template": self.template_provenance,
             "required_chunk_count": self.required_chunk_count,
             "target_format": TARGET_FORMAT,
             "device_map_strategy": self.device_map_strategy,
@@ -409,31 +329,14 @@ class LearnableSoftPromptGenerator:
             raise LearnableQueryGenerationError(
                 "Checkpoint target_format does not match the condition backend"
             )
-        if (
-            checkpoint.get("typelevel_sha256")
-            != self.provenance["attribute_reference"]["typelevel_sha256"]
-        ):
+        if checkpoint.get("template_sha256") != self.template_provenance["sha256"]:
             raise LearnableQueryGenerationError(
-                "Checkpoint and condition reference use different type-level data"
-            )
-        if (
-            checkpoint.get("chunk_data_sha256")
-            != self.provenance["attribute_reference"]["chunk_data_sha256"]
-        ):
-            raise LearnableQueryGenerationError(
-                "Checkpoint and condition reference use different annotated chunks"
+                "Checkpoint and visual attribute template do not match"
             )
         checkpoint_conditions = checkpoint.get("condition_labels")
         if checkpoint_conditions is not None and set(checkpoint_conditions) != CONDITION_LABELS:
             raise LearnableQueryGenerationError(
                 "Checkpoint condition labels do not match the runtime vocabulary"
-            )
-        checkpoint_template = checkpoint.get("canonical_attribute_template")
-        if isinstance(checkpoint_template, dict) and _node_types(checkpoint_template) != _node_types(
-            self.attribute_template
-        ):
-            raise LearnableQueryGenerationError(
-                "Checkpoint canonical attribute schema does not match the condition reference"
             )
         embedding_size = model.get_input_embeddings().embedding_dim
         if soft_prompt.shape[1] != embedding_size:

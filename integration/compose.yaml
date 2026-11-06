@@ -13,7 +13,7 @@ x-common: &common
 services:
   report-decompose:
     <<: *common
-    image: wlw/person-a:0.9.0-lab23-production
+    image: wlw/person-a:0.10.0-lab23-production
     build:
       context: ..
       dockerfile: components/person_a/Dockerfile
@@ -62,7 +62,7 @@ services:
 
   query-generation:
     <<: *common
-    image: wlw/person-a:0.9.0-lab23-production
+    image: wlw/person-a:0.10.0-lab23-production
     gpus: all
     build:
       context: ..

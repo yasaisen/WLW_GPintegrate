@@ -115,7 +115,7 @@ CaseList ─> Person C／WSI ROI 提案 ─────────────�
 
 ### Person A：報告解析與視覺條件生成
 
-版本：`0.9.0`
+版本：`0.10.0`
 
 Person A 有兩個入口：
 
@@ -246,7 +246,7 @@ python pipeline/run_pipeline.py --profile example
 Production runner 期待以下 image tags：
 
 ```text
-wlw/person-a:0.9.0-lab23-production
+wlw/person-a:0.10.0-lab23-production
 wlw/person-b:0.5.0-lab23-production
 wlw/person-c:0.1.0-lab23-production
 wlw/person-d:0.2.0-lab23-production
@@ -256,7 +256,7 @@ wlw/person-e:1.1.0-lab23-production
 可由專案根目錄分別建立：
 
 ```bash
-docker build -f components/person_a/Dockerfile -t wlw/person-a:0.9.0-lab23-production .
+docker build -f components/person_a/Dockerfile -t wlw/person-a:0.10.0-lab23-production .
 docker build -f components/person_b/Dockerfile -t wlw/person-b:0.5.0-lab23-production .
 docker build -f components/person_c/Dockerfile -t wlw/person-c:0.1.0-lab23-production .
 docker build -f components/person_d/Dockerfile -t wlw/person-d:0.2.0-lab23-production .
