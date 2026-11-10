@@ -123,10 +123,11 @@ Person A 有兩個入口：
 - `components.person_a.query_generation`：結合 D 與 Person B 的 F，產生 `G.VisualAttributeQueries`。
 
 正式 Query Generation 使用固定 revision 的 Gemma 3 1B 與 64-token Stage 2 soft prompt，模型完整放在
-單張 GPU，不使用 CPU offload。模型輸出必須同時通過嚴格 JSON、canonical attribute schema 與 condition
-vocabulary 驗證。若原始診斷文字導致非法輸出，production profile 可改用已驗證的 canonical diagnosis，
-以同一模型、soft prompt 與 chunks 重試；兩次嘗試的狀態與 response hash 都會寫入 G provenance，
-不會退回 deterministic reference backend。
+單張 GPU，不使用 CPU offload。模型輸出必須是嚴格 JSON；runtime 會將結果投影到 condition-free
+canonical template：多出的節點丟棄，缺少、型別錯誤或 condition 非法的 canonical option 補為
+`Not_Mentioned`，並把所有正規化明細寫入 G provenance。若原始診斷文字產生無法解析的輸出，
+production profile 可改用已驗證的 canonical diagnosis，以同一模型、soft prompt 與 chunks 重試；
+兩次嘗試的狀態與 response hash 都會寫入 provenance，不會退回 deterministic reference backend。
 
 報告解析採 hospital routing：目前 VGHTC 由正式 regex extractor 處理；其他院別與 MedGemma fallback
 規則請見 [Person A README](components/person_a/README.md)。

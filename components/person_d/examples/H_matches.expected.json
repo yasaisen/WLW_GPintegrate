@@ -3,7 +3,7 @@
   "schema_version": "2.0",
   "artifact_id": "H-example-case-001",
   "case_id": "case-001",
-  "producer": "person-d/visual-filter:0.2.0",
+  "producer": "person-d/visual-filter:0.4.0",
   "payload": {
     "data_mode": "inference",
     "DxItem_list": [
@@ -138,7 +138,7 @@
                         "status": "skipped",
                         "selected": false,
                         "reason": "example_stub_no_evaluation",
-                        "producer": "person-d/visual-filter:0.2.0",
+                        "producer": "person-d/visual-filter:0.4.0",
                         "dx_pair_id": "case-001-dx-001"
                       },
                       {
@@ -149,7 +149,7 @@
                         "status": "skipped",
                         "selected": false,
                         "reason": "example_stub_no_evaluation",
-                        "producer": "person-d/visual-filter:0.2.0",
+                        "producer": "person-d/visual-filter:0.4.0",
                         "dx_pair_id": "case-001-dx-002"
                       }
                     ]
@@ -230,7 +230,7 @@
                         "status": "skipped",
                         "selected": false,
                         "reason": "example_stub_no_evaluation",
-                        "producer": "person-d/visual-filter:0.2.0",
+                        "producer": "person-d/visual-filter:0.4.0",
                         "dx_pair_id": "case-001-dx-001"
                       },
                       {
@@ -241,7 +241,7 @@
                         "status": "skipped",
                         "selected": false,
                         "reason": "example_stub_no_evaluation",
-                        "producer": "person-d/visual-filter:0.2.0",
+                        "producer": "person-d/visual-filter:0.4.0",
                         "dx_pair_id": "case-001-dx-002"
                       }
                     ]
@@ -332,7 +332,7 @@
                         "status": "skipped",
                         "selected": false,
                         "reason": "example_stub_no_evaluation",
-                        "producer": "person-d/visual-filter:0.2.0",
+                        "producer": "person-d/visual-filter:0.4.0",
                         "dx_pair_id": "case-001-dx-001"
                       },
                       {
@@ -343,7 +343,7 @@
                         "status": "skipped",
                         "selected": false,
                         "reason": "example_stub_no_evaluation",
-                        "producer": "person-d/visual-filter:0.2.0",
+                        "producer": "person-d/visual-filter:0.4.0",
                         "dx_pair_id": "case-001-dx-002"
                       }
                     ]
@@ -424,7 +424,7 @@
                         "status": "skipped",
                         "selected": false,
                         "reason": "example_stub_no_evaluation",
-                        "producer": "person-d/visual-filter:0.2.0",
+                        "producer": "person-d/visual-filter:0.4.0",
                         "dx_pair_id": "case-001-dx-001"
                       },
                       {
@@ -435,7 +435,7 @@
                         "status": "skipped",
                         "selected": false,
                         "reason": "example_stub_no_evaluation",
-                        "producer": "person-d/visual-filter:0.2.0",
+                        "producer": "person-d/visual-filter:0.4.0",
                         "dx_pair_id": "case-001-dx-002"
                       }
                     ]

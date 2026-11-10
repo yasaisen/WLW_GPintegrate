@@ -115,9 +115,12 @@ python -m components.person_a.query_generation \
   --config components/person_a/configs/query_generation.learnable.json
 ```
 
-There is no condition-reference backend or fallback. Missing model assets,
-invalid generation, or unavailable GPU execution fails closed instead of
-substituting pre-authored diagnostic conditions.
+There is no condition-reference backend or fallback. Schema differences are
+normalized against the condition-free template: unexpected nodes are dropped,
+and missing, wrong-type, or illegal canonical conditions become
+`Not_Mentioned`, with the repairs recorded in G provenance. Missing model
+assets, unparseable generation, or unavailable GPU execution still fails
+closed instead of substituting pre-authored diagnostic conditions.
 
 ## Docker
 

@@ -83,7 +83,18 @@ class _FakeExtractor:
         models = {
             name: {
                 category: {
-                    attribute: {"prediction": labels[0] if labels else "N/A", "scores": {"N/A": 0.1}}
+                    attribute: {
+                        "prediction": labels[0] if labels else "N/A",
+                        "decision": {
+                            "best_scored_option": "N/A",
+                            "best_scored_similarity": 0.1,
+                            "threshold": 0.0,
+                            "comparison": ">=",
+                            "fallback_used": False,
+                            "fallback_label": None,
+                        },
+                        "scores": {"N/A": 0.1},
+                    }
                     for attribute, labels in attributes.items()
                 }
                 for category, attributes in consistent.items()
@@ -121,6 +132,7 @@ class NativeVisualFilterTests(unittest.TestCase):
         # Most tests below exercise the matching rules themselves.  Keep those
         # tests independent from the deploy-time switch in native.example.json.
         self.config["matching"]["enable"] = True
+        self.config["matching"]["selection_policy"] = "strict_match"
         self.config["matching"]["label_map_path"] = str(label_map)
         self.config["matching"]["label_map_sha256"] = hashlib.sha256(label_map.read_bytes()).hexdigest()
         self.e = _load("E_rois.valid.json")
@@ -198,6 +210,23 @@ class NativeVisualFilterTests(unittest.TestCase):
         self.assertEqual(
             "1.2.1",
             payload["reference_versions"]["visual_matching_filter"]["label_map"]["criteria_version"],
+        )
+        he_roi = next(
+            roi
+            for stain, roi in iter_rois(payload)
+            if stain["stain_id"] == "case-001-he"
+        )
+        self.assertEqual(
+            {
+                "best_scored_option": "N/A",
+                "best_scored_similarity": 0.1,
+                "threshold": 0.0,
+                "comparison": ">=",
+                "fallback_used": False,
+                "fallback_label": None,
+            },
+            he_roi["visualAttrs_info"]["models"]["PLIP"]
+            ["Cellular_and_Nuclear"]["Cytological_Atypia"]["decision"],
         )
 
     def test_pair_without_queries_gets_one_pair_level_event(self) -> None:
@@ -278,6 +307,47 @@ class NativeVisualFilterTests(unittest.TestCase):
         )
         self.assertTrue(all("query_id" in event for event in he_events))
 
+    def test_forward_policy_selects_when_one_disagreeing_model_is_informative(self) -> None:
+        self.config["matching"]["selection_policy"] = "forward_all_informative"
+
+        class _DisagreeingExtractor(_FakeExtractor):
+            def extract(self, image):
+                result = super().extract(image)
+                for model, prediction in (("PLIP", "Regular"), ("CONCH", "Vesicular")):
+                    result["models"][model]["Cellular_and_Nuclear"]["Chromatin"][
+                        "prediction"
+                    ] = prediction
+                return result
+
+        empty = {"Cellular_and_Nuclear": {"Chromatin": []}}
+        extractor = _DisagreeingExtractor(
+            {
+                "case-001-case-001-he-roi-001": empty,
+                "case-001-case-001-he-roi-002": empty,
+            }
+        )
+        artifact, _ = self._build(extractor)
+        validate_artifact(artifact, "H.MatchedROIs")
+
+        for stain, roi in iter_rois(artifact["payload"]):
+            if stain["stain_id"] != "case-001-he":
+                continue
+            event = next(
+                event
+                for event in roi["selection_history"]
+                if event.get("query_id") == "case-001-query-001"
+            )
+            self.assertEqual(
+                ("selected", "informative_visual_attributes_forwarded"),
+                (event["status"], event["reason"]),
+            )
+            matching = roi["visualAttrs_info"]["matching"]["case-001-query-001"]
+            self.assertEqual("forward_all_informative", matching["selection_policy"])
+            self.assertEqual(
+                "PLIP",
+                matching["condition_hits"]["Must_False"][0]["model"],
+            )
+
     def test_matching_can_be_disabled_while_extraction_still_runs(self) -> None:
         self.config["matching"]["enable"] = False
         self.config["matching"]["label_map_path"] = "missing-while-disabled.json"
@@ -350,7 +420,7 @@ class NativeVisualFilterTests(unittest.TestCase):
         )
         for e, g, message in cases:
             with self.assertRaisesRegex(ValueError, message):
-                build_example_artifact(e, g, "person-d/visual-filter:0.2.0")
+                build_example_artifact(e, g, "person-d/visual-filter:0.4.0")
             with self.assertRaisesRegex(ValueError, message):
                 self._build(_FakeExtractor({}), e=e, g=g)
 
@@ -365,7 +435,7 @@ class NativeVisualFilterTests(unittest.TestCase):
                 g["payload"]["reference_versions"].update(legacy)
                 with self.assertRaisesRegex(ValueError, "predates the condition-free"):
                     build_example_artifact(
-                        self.e, g, "person-d/visual-filter:0.2.0"
+                        self.e, g, "person-d/visual-filter:0.4.0"
                     )
                 with self.assertRaisesRegex(ValueError, "predates the condition-free"):
                     self._build(_FakeExtractor({}), g=g)
@@ -373,7 +443,7 @@ class NativeVisualFilterTests(unittest.TestCase):
         g = copy.deepcopy(self.g)
         g["payload"]["reference_versions"] = {"unknown_source": {}}
         with self.assertRaisesRegex(ValueError, "does not establish"):
-            build_example_artifact(self.e, g, "person-d/visual-filter:0.2.0")
+            build_example_artifact(self.e, g, "person-d/visual-filter:0.4.0")
         with self.assertRaisesRegex(ValueError, "does not establish"):
             self._build(_FakeExtractor({}), g=g)
 
@@ -407,7 +477,7 @@ class NativeVisualFilterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "case-001-query-001 diagnosticCriteria is missing 'version'"):
             self._build(_FakeExtractor({}), g=g)
         with self.assertRaisesRegex(ValueError, "diagnosticCriteria is missing 'version'"):
-            build_example_artifact(self.e, g, "person-d/visual-filter:0.2.0")
+            build_example_artifact(self.e, g, "person-d/visual-filter:0.4.0")
 
     def test_unsupported_criteria_version_fails_in_both_modes(self) -> None:
         g = _with_criteria_version(self.g, "0.0.0")
@@ -415,7 +485,7 @@ class NativeVisualFilterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, message):
             self._build(_FakeExtractor({}), g=g)
         with self.assertRaisesRegex(ValueError, message):
-            build_example_artifact(self.e, g, "person-d/visual-filter:0.2.0")
+            build_example_artifact(self.e, g, "person-d/visual-filter:0.4.0")
 
     def test_label_map_digest_is_enforced(self) -> None:
         self.config["matching"]["label_map_sha256"] = "0" * 64

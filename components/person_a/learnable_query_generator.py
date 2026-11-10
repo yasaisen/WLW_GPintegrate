@@ -78,38 +78,82 @@ def parse_strict_json_object(text: str) -> dict[str, Any]:
     return parsed
 
 
-def validate_generated_attributes(
+def normalize_generated_attributes(
     generated: dict[str, Any],
     template: dict[str, Any],
     allowed_values: dict[str, set[str]],
-) -> None:
-    """Reject incomplete schemas, extra keys, and out-of-vocabulary values."""
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Project model output onto the canonical condition schema.
+
+    Unexpected model nodes are discarded.  A missing canonical condition, a
+    node with the wrong structural type, or an illegal condition value is
+    replaced with ``Not_Mentioned``.  The returned diagnostics preserve every
+    repair decision for artifact provenance.
+    """
 
     expected_nodes = _node_types(template)
     actual_nodes = _node_types(generated)
-    if actual_nodes != expected_nodes:
-        missing = sorted(set(expected_nodes) - set(actual_nodes))
-        unexpected = sorted(set(actual_nodes) - set(expected_nodes))
-        wrong_type = sorted(
-            path
-            for path in set(expected_nodes) & set(actual_nodes)
-            if expected_nodes[path] != actual_nodes[path]
-        )
-        raise LearnableQueryGenerationError(
-            "Generated Attribute schema is not exact; "
-            f"missing={missing}, unexpected={unexpected}, wrong_type={wrong_type}"
-        )
+    missing = sorted(set(expected_nodes) - set(actual_nodes))
+    unexpected = sorted(set(actual_nodes) - set(expected_nodes))
+    wrong_type = sorted(
+        path
+        for path in set(expected_nodes) & set(actual_nodes)
+        if expected_nodes[path] != actual_nodes[path]
+    )
+    missing_value = object()
+    filled_condition_paths: list[str] = []
+    invalid_value_paths: list[str] = []
+    preserved_condition_count = 0
 
-    errors: list[str] = []
-    for path, value in _flatten(generated).items():
-        if not isinstance(value, str) or value not in allowed_values[path]:
-            errors.append(
-                f"{path}: expected exactly one legal condition string, got {value!r}"
+    def normalize_node(expected: Any, actual: Any, prefix: str) -> Any:
+        nonlocal preserved_condition_count
+        if isinstance(expected, dict):
+            actual_mapping = actual if isinstance(actual, dict) else {}
+            return {
+                key: normalize_node(
+                    expected_value,
+                    actual_mapping.get(key, missing_value),
+                    f"{prefix}.{key}" if prefix else str(key),
+                )
+                for key, expected_value in expected.items()
+            }
+
+        allowed = allowed_values.get(prefix)
+        if not allowed or "Not_Mentioned" not in allowed:
+            raise ValueError(
+                f"Canonical condition schema has no Not_Mentioned fallback at "
+                f"{prefix}"
             )
-    if errors:
-        raise LearnableQueryGenerationError(
-            "Generated Attribute values are invalid: " + "; ".join(errors)
-        )
+        if (
+            actual is not missing_value
+            and not isinstance(actual, dict)
+            and isinstance(actual, str)
+            and actual in allowed
+        ):
+            preserved_condition_count += 1
+            return actual
+
+        filled_condition_paths.append(prefix)
+        if actual is not missing_value and not isinstance(actual, dict):
+            invalid_value_paths.append(prefix)
+        return "Not_Mentioned"
+
+    normalized = normalize_node(template, generated, "")
+    diagnostics = {
+        "policy": "drop_unexpected_fill_unusable_not_mentioned",
+        "missing_nodes": missing,
+        "unexpected_nodes": unexpected,
+        "wrong_type_nodes": wrong_type,
+        "invalid_value_paths": sorted(invalid_value_paths),
+        "filled_condition_paths": sorted(filled_condition_paths),
+        "missing_node_count": len(missing),
+        "dropped_node_count": len(unexpected),
+        "wrong_type_node_count": len(wrong_type),
+        "invalid_value_count": len(invalid_value_paths),
+        "filled_condition_count": len(filled_condition_paths),
+        "preserved_condition_count": preserved_condition_count,
+    }
+    return normalized, diagnostics
 
 
 def _chunk_text(chunks: list[dict[str, Any]]) -> str:
@@ -496,9 +540,12 @@ class LearnableSoftPromptGenerator:
             "generated_tokens": int(generated_ids.shape[-1]),
         }
         generated = parse_strict_json_object(generated_text)
-        validate_generated_attributes(
+        normalized, normalization_diagnostics = normalize_generated_attributes(
             generated,
             self.attribute_template,
             self.allowed_values,
         )
-        return generated
+        self.last_generation_diagnostics["schema_normalization"] = (
+            normalization_diagnostics
+        )
+        return normalized

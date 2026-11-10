@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
@@ -8,8 +9,8 @@ import unittest
 from components.person_a.learnable_query_generator import (
     CONDITION_LABELS,
     LearnableQueryGenerationError,
+    normalize_generated_attributes,
     parse_strict_json_object,
-    validate_generated_attributes,
 )
 from components.person_a.query_generation import generate_artifact
 from contracts.metadata import dx_items
@@ -402,7 +403,7 @@ class LearnableQueryGenerationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "absent from D"):
                 generate_artifact(_d_artifact(), foreign, config)
 
-    def test_template_based_strict_json_validation(self) -> None:
+    def test_template_based_schema_normalization(self) -> None:
         attributes = {
             "Category": {
                 "Feature": {
@@ -422,7 +423,12 @@ class LearnableQueryGenerationTest(unittest.TestCase):
             )
         }
         generated = parse_strict_json_object(json.dumps(attributes))
-        validate_generated_attributes(generated, template, allowed)
+        normalized, diagnostics = normalize_generated_attributes(
+            generated, template, allowed
+        )
+        self.assertEqual(attributes, normalized)
+        self.assertEqual(3, diagnostics["preserved_condition_count"])
+        self.assertEqual(0, diagnostics["filled_condition_count"])
         self.assertEqual(
             {
                 "Must_True",
@@ -437,10 +443,239 @@ class LearnableQueryGenerationTest(unittest.TestCase):
         with self.assertRaises(LearnableQueryGenerationError):
             parse_strict_json_object("```json\n{}\n```")
 
-        invalid = json.loads(json.dumps(attributes))
-        invalid["Category"]["Feature"]["Present"] = "Sometimes"
-        with self.assertRaises(LearnableQueryGenerationError):
-            validate_generated_attributes(invalid, template, allowed)
+    def test_schema_mismatch_and_illegal_values_degrade_to_not_mentioned(self) -> None:
+        template = {
+            "Category": {
+                "Feature": {
+                    "Present": "Not_Mentioned",
+                    "Absent": "Not_Mentioned",
+                },
+                "Other": {"Seen": "Not_Mentioned"},
+            }
+        }
+        allowed = {
+            path: set(CONDITION_LABELS)
+            for path in (
+                "Category.Feature.Present",
+                "Category.Feature.Absent",
+                "Category.Other.Seen",
+            )
+        }
+        generated = {
+            "Category": {
+                "Feature": {
+                    "Present": "Sometimes",
+                    "Unexpected": "Must_True",
+                },
+                "Other": "Must_True",
+            },
+            "Legacy": {"Value": "Must_False"},
+        }
+
+        normalized, diagnostics = normalize_generated_attributes(
+            generated, template, allowed
+        )
+
+        self.assertEqual(
+            {
+                "Category": {
+                    "Feature": {
+                        "Present": "Not_Mentioned",
+                        "Absent": "Not_Mentioned",
+                    },
+                    "Other": {"Seen": "Not_Mentioned"},
+                }
+            },
+            normalized,
+        )
+        self.assertEqual(
+            ["Category.Feature.Absent", "Category.Other.Seen"],
+            diagnostics["missing_nodes"],
+        )
+        self.assertEqual(
+            [
+                "Category.Feature.Unexpected",
+                "Legacy",
+                "Legacy.Value",
+            ],
+            diagnostics["unexpected_nodes"],
+        )
+        self.assertEqual(["Category.Other"], diagnostics["wrong_type_nodes"])
+        self.assertEqual(
+            ["Category.Feature.Present"],
+            diagnostics["invalid_value_paths"],
+        )
+        self.assertEqual(
+            [
+                "Category.Feature.Absent",
+                "Category.Feature.Present",
+                "Category.Other.Seen",
+            ],
+            diagnostics["filled_condition_paths"],
+        )
+        self.assertEqual(3, diagnostics["filled_condition_count"])
+        self.assertEqual(0, diagnostics["preserved_condition_count"])
+
+    def test_dcis_legacy_schema_is_projected_onto_the_canonical_template(self) -> None:
+        document = json.loads(
+            (PERSON_A_REFERENCE / "visual_attribute_template_v1.2.1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        template = {
+            category: {
+                feature: {
+                    option: "Not_Mentioned" for option in definition["options"]
+                }
+                for feature, definition in features.items()
+            }
+            for category, features in document["visualAttrs"].items()
+        }
+        allowed = {
+            path: set(CONDITION_LABELS)
+            for path in (
+                f"{category}.{feature}.{option}"
+                for category, features in template.items()
+                for feature, options in features.items()
+                for option in options
+            )
+        }
+        generated = deepcopy(template)
+        special = generated["Special_Features"]
+        calcifications = special["Calcifications"]
+        del calcifications["Amorphous"]
+        del calcifications["Present, Not Otherwise Specified"]
+        calcifications["Irregularly scattered"] = "High_Possibly_True"
+        secretion = special["Endoluminal_Secretion"]
+        del secretion["Mucin pools/Extracellular mucin"]
+        secretion.update(
+            {
+                "Extracellular matrix": "Low_Possibly_True",
+                "Mucin pools": "Low_Possibly_True",
+                "Proteinaceous secretions": "High_Possibly_True",
+            }
+        )
+        del special["Tumour_Infiltrating_Lymphocytes"]
+        special["Tumour_Microenvironment"] = {
+            option: "Not_Mentioned"
+            for option in (
+                "Absent",
+                "Dysplastic/Chondromyxoid",
+                "Fibrofatty/Prominent",
+                "Lymphatic",
+                "Oedematous",
+                "Unable to confirm",
+            )
+        }
+
+        normalized, diagnostics = normalize_generated_attributes(
+            generated, template, allowed
+        )
+
+        self.assertEqual(8, diagnostics["missing_node_count"])
+        self.assertEqual(11, diagnostics["dropped_node_count"])
+        self.assertEqual(0, diagnostics["wrong_type_node_count"])
+        self.assertEqual(7, diagnostics["filled_condition_count"])
+        self.assertNotIn(
+            "Irregularly scattered",
+            normalized["Special_Features"]["Calcifications"],
+        )
+        self.assertNotIn("Tumour_Microenvironment", normalized["Special_Features"])
+        self.assertEqual(
+            "Not_Mentioned",
+            normalized["Special_Features"]["Calcifications"]["Amorphous"],
+        )
+        self.assertTrue(
+            all(
+                value == "Not_Mentioned"
+                for value in normalized["Special_Features"]
+                ["Tumour_Infiltrating_Lymphocytes"].values()
+            )
+        )
+
+    def test_schema_normalization_is_recorded_in_g_provenance(self) -> None:
+        class NormalizingGenerator(FakeLearnableGenerator):
+            def __init__(self) -> None:
+                super().__init__()
+                self.last_generation_diagnostics: dict = {}
+
+            def generate(self, dx_text: str, chunks: list[dict]) -> dict:
+                self.calls.append(
+                    (dx_text, [chunk["chunk_id"] for chunk in chunks])
+                )
+                template = {
+                    "Cellular_and_Nuclear": {
+                        "Cell_Pleomorphism": {
+                            "Monomorphic": "Not_Mentioned",
+                            "Pleomorphic": "Not_Mentioned",
+                        },
+                        "Polarity": {
+                            "Maintained": "Not_Mentioned",
+                            "Lost": "Not_Mentioned",
+                        },
+                    }
+                }
+                allowed = {
+                    path: set(CONDITION_LABELS)
+                    for path in (
+                        "Cellular_and_Nuclear.Cell_Pleomorphism.Monomorphic",
+                        "Cellular_and_Nuclear.Cell_Pleomorphism.Pleomorphic",
+                        "Cellular_and_Nuclear.Polarity.Maintained",
+                        "Cellular_and_Nuclear.Polarity.Lost",
+                    )
+                }
+                normalized, diagnostics = normalize_generated_attributes(
+                    {
+                        "Cellular_and_Nuclear": {
+                            "Cell_Pleomorphism": {
+                                "Monomorphic": "Must_True",
+                                "Legacy": "Must_False",
+                            }
+                        }
+                    },
+                    template,
+                    allowed,
+                )
+                self.last_generation_diagnostics = {
+                    "response_sha256": "3" * 64,
+                    "schema_normalization": diagnostics,
+                }
+                return normalized
+
+        with tempfile.TemporaryDirectory(dir=PERSON_A_REFERENCE) as temp_dir:
+            config = {
+                "component_version": "person-a/query-generation:0.10.0",
+                "asset_integrity": "record_only",
+                **_write_references(Path(temp_dir)),
+                "backend": {
+                    "mode": "learnable_soft_prompt",
+                    "required_chunk_count": 3,
+                },
+            }
+            artifact = generate_artifact(
+                _d_artifact(),
+                _f_artifact(),
+                config,
+                generator=NormalizingGenerator(),
+            )
+
+        validate_artifact(artifact, "G.VisualAttributeQueries")
+        attempt = artifact["payload"]["reference_versions"][
+            "learnable_query_generation"
+        ]["generation_attempts"][0]
+        self.assertEqual("accepted", attempt["status"])
+        self.assertEqual(
+            "drop_unexpected_fill_unusable_not_mentioned",
+            attempt["schema_normalization"]["policy"],
+        )
+        self.assertEqual(
+            3,
+            attempt["schema_normalization"]["filled_condition_count"],
+        )
+        self.assertEqual(
+            ["Cellular_and_Nuclear.Cell_Pleomorphism.Legacy"],
+            attempt["schema_normalization"]["unexpected_nodes"],
+        )
 
 
 if __name__ == "__main__":
