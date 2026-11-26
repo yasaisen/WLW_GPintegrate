@@ -73,7 +73,7 @@ COMPONENTS = {
     "interest_pattern": {
         "module": "components.person_c.interest_pattern",
         "image_env": "WLW_IMAGE_PERSON_C",
-        "image": "wlw/person-c:0.1.0-lab23-production",
+        "image": "wlw/person-c:0.5.0",
         "gpu": True,
     },
     "knowledge_retrieval": {

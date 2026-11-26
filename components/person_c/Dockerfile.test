@@ -1,0 +1,7 @@
+FROM wlw/person-c:0.5.0
+WORKDIR /app
+COPY components/person_c/requirements-test.txt /tmp/requirements-test.txt
+RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore \
+      -r /tmp/requirements-test.txt
+COPY components/person_c/tests /app/components/person_c/tests
+COPY components/person_c/examples /app/components/person_c/examples
