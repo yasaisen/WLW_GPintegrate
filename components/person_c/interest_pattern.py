@@ -13,6 +13,7 @@ filled) is cut into connected objects, and the minimum bounding box of each obje
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from hashlib import sha256
 from math import ceil, floor, isfinite
@@ -72,8 +73,9 @@ def validate_segnet(cfg: Any) -> dict[str, Any]:
         raise ValueError("person_c segnet requires a segnet object")
     checkpoint = cfg.get("checkpoint")
     if (not isinstance(checkpoint, dict) or not isinstance(checkpoint.get("path"), str) or not checkpoint["path"]
-            or not isinstance(checkpoint.get("revision"), str) or not checkpoint["revision"].startswith("sha256:")):
-        raise ValueError("person_c segnet.checkpoint must be {path, revision: sha256:<digest>}")
+            or not isinstance(checkpoint.get("revision"), str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", checkpoint["revision"]) is None):
+        raise ValueError("person_c segnet.checkpoint must be {path, revision: sha256:<64 lowercase hex digits>}")
     classes = cfg.get("roi_classes")
     if not isinstance(classes, list) or not classes or any(not isinstance(c, str) or not c for c in classes):
         raise ValueError("person_c segnet.roi_classes must be a non-empty string list")

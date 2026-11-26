@@ -39,6 +39,15 @@ def _case_input(he_path: str) -> dict:
     }
 
 
+def _non_he_case_input(path: str = "/missing-er.svs") -> dict:
+    source = _case_input("/missing-he.svs")
+    source["case_list"][0]["tissue_blocks"][0]["stains"] = [{
+        "stain_id": "er-1", "stain_type": "ER", "filename": "missing-er.svs",
+        "filepath": path, "memo": "",
+    }]
+    return source
+
+
 def _config() -> dict:
     return {
         "component_version": "person-c/interest-pattern:test", "mode": "region_proposal",
@@ -137,8 +146,9 @@ class InterestPatternTest(TestCase):
 
             he_path = Path(temp_dir) / "tiny.svs"
             he_path.touch()
-            with self.assertRaisesRegex(FileNotFoundError, "SEGNET checkpoint is missing"):
-                run(_case_input(str(he_path)), _config())
+            with patch("torch.cuda.is_available", return_value=True):
+                with self.assertRaisesRegex(FileNotFoundError, "SEGNET checkpoint is missing"):
+                    run(_case_input(str(he_path)), _config())
 
     def test_example_mode_opens_no_slide_and_makes_no_roi(self) -> None:
         output = run(_case_input("/data/synthetic.svs"), {"component_version": "person-c:test", "mode": "example"})
@@ -197,6 +207,10 @@ class SegnetSettingsTests(unittest.TestCase):
         settings = ip.validate_settings(self.config())
         self.assertEqual("region_proposal", settings["mode"])
         self.assertEqual(["TUM", "BEN"], settings["segnet"]["roi_classes"])
+        self.assertEqual(
+            "sha256:b13895d5cf7ca919cb6b78e43931a5e9174f7305573964c3ed1ac5cea5b3e95b",
+            settings["segnet"]["checkpoint"]["revision"],
+        )
 
     def test_bad_values_are_rejected(self) -> None:
         for path, value in (
@@ -207,6 +221,86 @@ class SegnetSettingsTests(unittest.TestCase):
             config[path[0]][path[1]] = value
             with self.assertRaises(ValueError, msg=str(path)):
                 ip.validate_settings(config)
+
+    def test_malformed_checkpoint_revisions_are_rejected(self) -> None:
+        invalid = (
+            "sha256:bad",
+            "sha256:",
+            "sha256:" + "a" * 63,
+            "sha256:" + "a" * 65,
+            "sha256:" + "g" * 64,
+            "sha256:" + "A" * 64,
+            "md5:" + "a" * 64,
+            None,
+            7,
+        )
+        for revision in invalid:
+            with self.subTest(revision=revision):
+                config = self.config()
+                config["segnet"]["checkpoint"]["revision"] = revision
+                with self.assertRaisesRegex(ValueError, "64 lowercase hex"):
+                    ip.validate_settings(config)
+
+        config = self.config()
+        config["segnet"]["checkpoint"].pop("revision")
+        with self.assertRaisesRegex(ValueError, "64 lowercase hex"):
+            ip.validate_settings(config)
+
+    def test_malformed_revision_fails_before_wsi_or_model_io(self) -> None:
+        config = _config()
+        config["segnet"]["checkpoint"]["revision"] = "sha256:bad"
+        with patch("pathlib.Path.is_file") as is_file, \
+             patch("components.person_c.segmentation.load_model") as load_model, \
+             patch("openslide.OpenSlide") as open_slide:
+            with self.assertRaisesRegex(ValueError, "64 lowercase hex"):
+                run(_case_input("/missing-he.svs"), config)
+        is_file.assert_not_called()
+        load_model.assert_not_called()
+        open_slide.assert_not_called()
+
+    def test_cli_revision_gate_and_lawful_non_he_empty_e(self) -> None:
+        root = Path(__file__).resolve().parents[3]
+        with TemporaryDirectory(dir=CONFIG.parent, prefix="postmerge-test-") as config_dir, \
+             TemporaryDirectory(dir=WORK) as temp_dir:
+            input_path = Path(temp_dir) / "case.json"
+            invalid_output = Path(temp_dir) / "E_invalid.json"
+            valid_output = Path(temp_dir) / "E_valid.json"
+            invalid_config = Path(config_dir) / "invalid.json"
+            valid_config = Path(config_dir) / "valid.json"
+            input_path.write_text(json.dumps(_non_he_case_input()), encoding="utf-8")
+            bad = _config()
+            bad["segnet"]["checkpoint"]["revision"] = "sha256:bad"
+            invalid_config.write_text(json.dumps(bad), encoding="utf-8")
+            valid_config.write_text(json.dumps(_config()), encoding="utf-8")
+
+            command = [sys.executable, "-m", "components.person_c.interest_pattern",
+                       "--input", str(input_path), "--output", str(invalid_output),
+                       "--config", str(invalid_config)]
+            invalid = subprocess.run(command, cwd=root, capture_output=True, text=True)
+            self.assertNotEqual(0, invalid.returncode)
+            self.assertIn("64 lowercase hex", invalid.stderr)
+            self.assertFalse(invalid_output.exists())
+
+            command[-1] = str(valid_config)
+            command[command.index(str(invalid_output))] = str(valid_output)
+            valid = subprocess.run(command, cwd=root, capture_output=True, text=True)
+            self.assertEqual(0, valid.returncode, valid.stderr)
+            output = json.loads(valid_output.read_text(encoding="utf-8"))
+            validate_artifact(output, "E.ROIs")
+            stain = output["payload"]["case_list"][0]["tissue_blocks"][0]["stains"][0]
+            self.assertEqual((0, []), (stain["roi_num"], stain["roi_list"]))
+
+    def test_valid_length_wrong_checksum_fails_before_torch_load(self) -> None:
+        with TemporaryDirectory(dir=WORK) as temp_dir:
+            checkpoint = Path(temp_dir) / "wrong.pt"
+            checkpoint.write_bytes(b"not the expected checkpoint")
+            settings = _config()
+            with patch("torch.cuda.is_available", return_value=True), \
+                 patch("components.person_c.segmentation.resolve_person_reference_path", return_value=checkpoint), \
+                 patch("torch.load") as torch_load:
+                with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                    seg.load_model(settings)
+            torch_load.assert_not_called()
 
 
 class ReadTests(unittest.TestCase):

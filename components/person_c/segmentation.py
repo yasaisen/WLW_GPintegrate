@@ -216,7 +216,7 @@ class TileReader:
         return len(self.boxes)
 
     def __getitem__(self, i: int) -> tuple[int, int, np.ndarray]:
-        
+
         if self.slide is None:
             cv2.setNumThreads(1)                       # the workers share the CPUs: one thread each
             self.slide = openslide.OpenSlide(self.path)
