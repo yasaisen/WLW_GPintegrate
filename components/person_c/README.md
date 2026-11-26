@@ -1,298 +1,304 @@
-# 丙(Person C):WSI Interest Pattern Extraction
+# Person C · Epithelium ROI extraction
 
-把一個 case 的 WSI 轉成 ROI 清單 `[E]`,交給丁(`visual_filter`)。
-
-- Owner:person_C
-- Component version:`0.1.0`(`status: integration_draft`,第一版可跑通,演算法為初版)
-- 輸入:`CaseListInput@1.0`(每次一個 case)
-- 輸出:`E.ROIs@2.0`
-- 入口:`python -m components.person_c.interest_pattern --input ... --output ... --config ...`
-
-## 1. 在整個流程中的位置
+Person C reads one raw CaseList case and finds, in every H&E whole-slide image (WSI) of the case, the **rectangles (ROIs) that
+contain epithelium**. A segmentation network labels the tissue, the epithelium is cut into connected objects, and the minimum
+bounding box of each object is one ROI. Person D (`visual_filter`) reopens the slide with `filepath` and `level0_info.xywh` to
+rebuild the pixels; Person E (`clee`) reads the ROI geometry through H.
 
 ```text
-                      WLW pipeline(單一 case)
-
-  CaseList ──> 甲 report_decompose ──> [D] ──┬──> 乙 knowledge_retrieval ──> [F]
-      │                                      │                                │
-      │                                      │         甲 query_generation <──┘
-      │                                      │                  │
-      │                                      │                 [G]
-      │                                      │                  │
-      └──> 丙 interest_pattern ──> [E] ──────┼──> 丁 visual_filter <── [G]
-           ^^^^^^^^^^^^^^^^^^^^^               │            │
-           本元件(這份 README)                │           [H]
-                                               │            │
-                                               └──> 戊 clee <┘ ──> [I] ──> DRGVLM
+ CaseListInput@1.0 ──▶  [ C ]  ──▶  E.ROIs@2.0  ──▶  D (visual filter)  ──▶  …
+   one case              WSI → tissue classes → epithelium → boxes
 ```
 
-丙只依賴 CaseList,不依賴甲、乙;丁、戊之後會讀丙的 ROI 座標去重建影像。
-
-## 2. 這個元件做什麼
-
-```text
- CaseList JSON (一個 case)
-        │
-        ▼
- ┌────────────────────────────────────────────────────────────┐
- │ interest_pattern.py                                        │
- │                                                            │
- │  驗證輸入(單案、schema)                                  │
- │        │                                                   │
- │        ▼                                                   │
- │  for 每個 block ─> for 每個 stain                          │
- │        │                                                   │
- │        ├─ stain_type 不在 stain_types ──> roi_list = []    │
- │        │                                                   │
- │        └─ 要處理的 stain:                                  │
- │             │                                              │
- │             ▼                                              │
- │     ┌───────────────┐   讀 slide 尺寸與 MPP                │
- │     │ slide_info    │   (沒有 MPP 就直接失敗)             │
- │     └──────┬────────┘                                      │
- │            ▼                                               │
- │     ┌───────────────────────────────────────────┐          │
- │     │ region/proposal.py   (GPU)                │          │
- │     │                                           │          │
- │     │  CONCH 抽 dense 特徵                      │          │
- │     │     ──> vMF 分群 (K 群)                   │          │
- │     │     ──> zero-shot 幫每群命名 (BCSS 詞表)  │          │
- │     │     ──> 只留 proposal 類別                │          │
- │     │            tumor / dcis /                 │          │
- │     │            normal_acinus_or_duct /        │          │
- │     │            metaplasia_NOS                 │          │
- │     │     ──> 輸出 polygon (level-0 像素)       │          │
- │     └──────────────────┬────────────────────────┘          │
- │                        ▼                                   │
- │     ┌───────────────────────────────────────────┐          │
- │     │ rois.py   (純 Python)                     │          │
- │     │  每個聯通元件 ──> 一個外接矩形 ROI        │          │
- │     │  level0_info + main_info (換成 target_mpp)│          │
- │     └──────────────────┬────────────────────────┘          │
- │                        ▼                                   │
- │          roi_list / roi_num / selection_history            │
- │                                                            │
- │  寫檔前再驗證 E.ROIs 契約,失敗就不寫檔                    │
- └────────────────────────────────────────────────────────────┘
-        │
-        ▼
- E.ROIs JSON  ──>  丁 visual_filter
-```
-
-重點:
-
-- **不輸出圖片。** `roi_path` 為 `null`,下游用 `stains[].filepath` 加 `level0_info` 自己從 WSI 裁圖。
-- **`region/` 是可替換的部分。** 它只負責「給一張 WSI,回傳 polygon」;之後換演算法,只要保持這個介面,CLI、契約驗證、ROI 轉換都不用動。
-
-## 3. 兩種模式
-
-| Config | 行為 |
+| Item | Value |
 |---|---|
-| `configs/example.json`(`mode: example`) | 契約用的空殼,不開 slide,ROI 為空。共用 pipeline 和既有測試使用 |
-| `configs/region_proposal.json`(`mode: region_proposal`) | 上圖的真實流程 |
+| **Owner** | Person C |
+| **Version** | `0.5.0`, producer string `person-c/interest-pattern:0.5.0` |
+| **Input / output** | `CaseListInput@1.0` (one case per call) → `E.ROIs@2.0` |
+| **Algorithm** | SEGNET student (DeepLab v3+), trained without annotation on BRACS slides |
+| **Needs** | one CUDA GPU, the checkpoint under `reference/person_c/`, OpenSlide |
+| **Entry point** | `python -m components.person_c.interest_pattern --input … --output … --config …` |
 
-## 4. 座標與 ROI 規則(下游以本節為準)
+**Contents**
+[1 Quick start](#1-quick-start) ·
+[2 How it works](#2-how-it-works) ·
+[3 Coordinates and ROI rules](#3-coordinates-and-roi-rules) ·
+[4 Figures](#4-figures) ·
+[5 Code structure](#5-code-structure) ·
+[6 Environment and performance](#6-environment-and-performance) ·
+[7 Limits and notes](#7-limits-and-notes) ·
+[8 Changelog](#8-changelog)
 
-- 座標單位是 level-0 像素,原點在左上,x 向右、y 向下。
-- `xywh = [left, top, width, height]`,涵蓋 `[left, left+width) × [top, top+height)`,一定在 slide 範圍內。
-- **一個聯通元件(一個 proposal polygon)一個 ROI**,取其外接矩形(往外取整到整數像素,夾在 slide 範圍內)。ROI 大小不固定;巢狀或相鄰元件的外框可能重疊。
-- 小於 `roi.min_region_area_px` 的元件丟掉(面積已扣除挖洞);每個 stain 最多 `roi.max_rois_per_stain` 個,由大的元件先取。
-- 排序為 `(top, left)`,`global_idx` 依「block → stain → 此順序」從 0 連續編號;`local_idx` 是 stain 內序號。
-- `roi_id = <stain_id>-roi-<local_idx:05d>`,case 內唯一。
-- `main_info` 是同一個矩形換算到「每個 ROI 自己的工作 MPP」:`mpp = max(roi.target_mpp, 最長邊(µm) ÷ roi.max_main_side_px)`。也就是預設用 `target_mpp`,若這樣會讓最長邊超過 `max_main_side_px`(預設 2048),就改用更粗的 MPP,大的聯通元件因此是縮小看,不會被切開。`level0_info` 完全不受影響。
-  `roi_wh = max(1, round(level0_wh × level0_mpp ÷ mpp))`(每軸),`xywh` 以同一比例縮放並四捨五入。這與 person_e 讀 ROI 的公式一致。
-- `mpp` 欄位:x、y 相同時是單一數字,否則是 `[mpp_x, mpp_y]`。
-- `coords_seg`、`DxPair`、`visualAttrs`、`visualAttrs_info` 都是 `null`。
-- 每個 ROI 附一筆 `selection_history` 事件:`stage=interest_pattern_extraction`、`action=candidate_generated`、`status=selected`。
+---
 
-### 4.1 丙對下游的保證
-
-對任何成功輸出的 `E.ROIs`,以下成立(第 1、2、4、5、6、7 項由單元測試與 `examples/` 檢查;第 3 項由程式內的 MPP 檢查保證;第 8 項是幾何特性,無法測試):
-
-1. 同一個 case 內,`roi_id` 與 `global_idx` 各自唯一;`roi_num == len(roi_list)`。
-2. 每個 ROI 的 `level0_info.xywh` 為整數、寬高 > 0,且完全落在 slide 的 level-0 範圍內。
-3. `level0_info.mpp` 是 slide 的 level-0 MPP(來自 `openslide.mpp-x/y`,缺失即失敗),`main_info.mpp` 是該 ROI 的工作 MPP(單一數字,≥ `roi.target_mpp`)。
-4. `main_info.roi_wh = max(1, round(level0_info.roi_wh × level0_info.mpp ÷ main_info.mpp))`(每軸);`main_info.xywh` 是 `level0_info.xywh` 以同一比例換算。
-5. `roi_path` 一律為 `null`(不輸出圖片);`coords_seg`、`DxPair`、`visualAttrs`、`visualAttrs_info` 一律為 `null`。
-6. `selection_history` 第一筆是丙的事件(`stage=interest_pattern_extraction`、`status=selected`);丙不會寫 `pseudo_DxPair`。
-7. 非處理的 stain 照常保留,`roi_num=0`、`roi_list=[]`;一個 case 沒有任何 ROI 也是合法的成功輸出。
-8. 外接矩形可能互相重疊、可能包含空白;同一個 ROI 不保證整塊都是病灶。
-
-### 4.2 下游如何取得 ROI 影像
-
-不要用 `global_idx` 猜來源。以 `stain.filepath`(外部絕對路徑)加 `level0_info` 重建:
-
-```python
-import openslide
-slide = openslide.OpenSlide(stain["filepath"])
-x, y, w, h = roi["level0_info"]["xywh"]          # level-0 像素,左上角起算
-out_w, out_h = roi["main_info"]["roi_wh"]         # 影像最終尺寸
-# 從夠細的金字塔層讀 (x, y, w, h) 這個 level-0 區域,縮放到 (out_w, out_h) 即為 main_info 視角的 ROI。
-```
-
-這與 person_e 的 `_read_wsi_roi` 使用同一個公式,因此戊可以直接用,不需要額外轉換。
-
-已驗證:用 person_e 的 `_read_wsi_roi` 實際讀取 BRACS_1003691 的 16 個 ROI(含最大的 6 個,最長邊 > 12000 px),讀出的影像尺寸與 `main_info.roi_wh` 全部一致。
-
-## 5. 設定(`configs/region_proposal.json`)
-
-| 鍵 | 說明 |
-|---|---|
-| `stain_types` | 要處理的染色類型,`null` 代表全部。其他 stain 保留,`roi_list=[]` |
-| `region.conch_checkpoint`、`vocab_json` | 外部資產(權重、BCSS 類別描述),必須在 `reference/person_c/` 之下;執行前檢查 SHA-256 |
-| `region.conch_lib_path` | 隨元件發佈(`third_party/CONCH`,相對於 `components/person_c/`);同樣檢查 SHA-256 |
-| `region.vocab`、`proposal_categories` | zero-shot 詞表(`BCSS`)與保留的類別,`[]` 代表詞表預設 |
-| `region.fields`、`mag`、`overlap` | CONCH 視野(level-0 px)、倍率、重疊比例 |
-| `region.K`、`radius`、`pca_dim`、`use_patch`、`seed`、`zs_temp` | 分群與 zero-shot 參數 |
-| `region.device`、`batch_size`、`num_workers` | 執行參數 |
-| `roi.target_mpp`、`max_main_side_px`、`min_region_area_px`、`max_rois_per_stain` | ROI 轉換參數(`max_main_side_px`:`main_info` 最長邊上限) |
-
-## 6. 執行
-
-目錄必須是 repo 的同層結構(見根目錄 README):`../reference/person_c/`、`../run/`。
+## 1. Quick start
 
 ```bash
+# one case → one E (run it inside a GPU job on a cluster, not on a login node)
 python -m components.person_c.interest_pattern \
   --input  ../run/input/pipeline/case-001.json \
   --output ../run/output/work/E_rois.json \
   --config components/person_c/configs/region_proposal.json
+
+# tests (no GPU, no slide, no checkpoint)
+python -m unittest discover -s components/person_c/tests -t . -v
 ```
 
-失敗(非單案、slide 讀不到、MPP 缺失、CUDA 不可用、模型錯誤、輸出不合契約)一律非零結束,不寫出 E。
+`--input` and `--output` must be below the sibling `run/`, `--config` below `components/person_c/configs/`. Two configs exist,
+and the pipeline reads both by name (`pipeline/run_pipeline.py`):
 
-容器(在 repo 根目錄 build;`reference/`、`run/` 以掛載提供,不放進 image):
+| Config | `mode` | What it does |
+|---|---|---|
+| `configs/region_proposal.json` | `region_proposal` | The algorithm below. The pipeline's production profile. |
+| `configs/example.json` | `example` | Opens no slide and makes no ROI. The pipeline's example profile and the contract tests. |
+
+Every key of the config is described in [configs/README.md](configs/README.md). The mode names the *stage* (region proposal), not
+the algorithm.
+
+<details>
+<summary><b>Container</b> (written, <b>not built</b>: there is no Docker where this was developed)</summary>
+
+`reference/` and `run/` are mounted, not copied into the image. The pipeline starts the tag `wlw/person-c:0.1.0-lab23-production`
+(overridable with `WLW_IMAGE_PERSON_C`); build with that tag or set the variable to the tag built here.
 
 ```bash
-docker build -f components/person_c/Dockerfile -t wlw/person-c:0.1.0 .
+docker build -f components/person_c/Dockerfile -t wlw/person-c:0.5.0 .
 docker run --rm --gpus all \
   -v "$(pwd)/../reference:/reference:ro" -v "$(pwd)/../run:/run" \
-  wlw/person-c:0.1.0 \
+  wlw/person-c:0.5.0 \
     --input  /run/input/pipeline/case-001.json \
     --output /run/output/work/E_rois.json \
     --config /app/components/person_c/configs/region_proposal.json
 ```
 
-(image tag 與 `component.yaml` 的 `version`、artifact 的 `producer` 一致:`person-c/interest-pattern:0.1.0`。)
+</details>
 
-測試(純 Python,不需要 GPU):
+---
 
-```bash
-python -m unittest components.person_c.tests.test_interest_pattern
+## 2. How it works
+
+```text
+  WSI (H&E)
+    │   tiles of 1792 µm at 1 µm/px, +112 µm of context, read by 6 worker processes
+    ▼
+  ┌─ student ───────────────────────────────────────────────────────────────────────────┐
+  │  224 px windows, half overlap, cosine² blending                  one net   GPU      │
+  │  one probability vector per 4 µm cell, 10 classes (c9)                              │
+  │  enlarged bilinearly to 1 µm/px, then argmax                                        │
+  └─────────────────────────────────────────────────────────────────────────────────────┘
+    │  STAGE 1   tissue    class of every pixel (the student labels the glass too: class OTH)
+    ▼
+    │  STAGE 2   epithelium    union of TUM and BEN, every closed hole filled
+    ▼
+    │  STAGE 3   boxes    minimum bounding box of each connected object ≥ 6400 px,
+    ▼                     a box completely inside another box dropped
+  ROI records ──▶ E.ROIs
 ```
 
-含 `examples/` 的 canonical example 比對、輸入錯誤(多案、slide 不存在)與資產 digest 檢查(通過、checkpoint 被改、library 被改、檔案缺失)測試。測試只用 `components/person_c/examples/` 內的檔案(含 `cases.example.json`),image 內不需要 `integration/` 即可在乾淨環境完整執行:
+| Decision | What and why |
+|---|---|
+| **Model** | DeepLab v3+ (ResNet-101, ASPP, decoder to stride 4), 10 classes `TUM BEN STR LYM NEC FAT VES BLD SEC OTH`. Trained in PIPELINE/SEGNET (`Unsup`, spec `c9_224px_1um_sclipcrf_glvq5r2m20-bracs_wsi`, seed 0, step 6000) on unlabeled BRACS slides with the pseudo labels of the SCLIP teacher. **No annotation was used.** |
+| **No foreground step** | The student labels the glass itself, so no tissue detector runs before it. |
+| **1 µm/px** | The network outputs one vector per 4 µm cell. The *probabilities* (not the labels) are enlarged bilinearly before the argmax, so the borders are smooth; everything after works at 1 µm/px. |
+| **Holes** | The student draws the wall of a gland. A ring that is closed is filled, and what lies inside belongs to the ring (no box of its own). A ring that is not closed cannot be filled; there a box completely inside a larger box is dropped. Boxes that only overlap are all kept. |
+| **No dilation** | The mask is used as the student drew it. |
+| **Checkpoint** | `reference/person_c/checkpoint/segnet/c9_sclip_bracs_s0.pt`, pinned by `revision` (SHA-256) in the config and checked before it is loaded. |
+| **Provenance** | E records what produced the ROIs in `payload.reference_versions.interest_pattern`: mode, checkpoint with SHA-256, classes, `postprocess_mpp`, `min_object_size`. |
 
-```bash
-docker run --rm --entrypoint python wlw/person-c:0.1.0 -m unittest components.person_c.tests.test_interest_pattern
+Only H&E stains are opened (the student was trained on H&E). Every other stain stays in E with `roi_num = 0` and `roi_list = []`.
+
+---
+
+## 3. Coordinates and ROI rules
+
+*Downstream components rely on this section.*
+
+| Topic | Rule |
+|---|---|
+| **Level 0** | The full-resolution image, origin at the upper left, x to the right, y down. `level0_info.xywh = [x, y, w, h]` in level-0 pixels covers `[x, x + w) × [y, y + h)` and always lies inside the slide. `level0_info.mpp = [mpp_x, mpp_y]` is read from the slide; a slide without MPP fails. |
+| **Mask → box** | The epithelium mask is at `postprocess_mpp` (1 µm/px). Each connected object (4-connectivity) of at least `min_object_size` pixels gets its minimum bounding box, lower edge floored and upper edge ceiled after scaling to level 0, clamped to the slide. A box completely inside another box is dropped. |
+| **`main_info`** | The same box in a virtual image resampled to a working MPP chosen from the box area in level-0 pixels²: up to 1, 4, 16, 64, 256, 1024 million → 0.25, 0.5, 1, 2, 4, 8 µm/px; larger → 16. `xywh` is floored / ceiled by the same scaling and clamped; `mpp` is the scalar working MPP; `area = w × h` in the pixels of that record. |
+| **`cxcywh`** | `[cx / W, cy / H, w / W, h / H]` of the image of that record (contract clarification CCR-C-001). |
+| **Identity** | `roi_id = <case_id>-<stain_id>-roi-<16 hex>`, a hash of case, stain and level-0 box. `global_idx` counts the ROIs of the case in stain order, `local_idx` those of the stain. The ROIs of a stain are ordered by (top, left). |
+| **History** | One event per ROI: stage `interest_pattern_extraction`, owner `person_C`, action `candidate_generated`, status `selected`. `DxPair`, `visualAttrs`, `visualAttrs_info` are `null`. |
+| **Crops** | `roi_path` is `null` in both records; downstream components reopen the slide with `filepath` and the box. |
+| **Empty** | A stain without objects gives `roi_num = 0`; a case without any ROI is a valid E. |
+| **Failure** | More than one case in the input, a missing slide, a missing MPP, a missing or wrong checkpoint, no CUDA GPU, a model error, or an E that violates the contract ends with a non-zero exit code and **no E is written**. |
+
+---
+
+## 4. Figures
+
+Optional pictures of the three stages, for whoever checks the segmentation. They are drawn after the boxes are final, so they never
+change the ROIs. All are off by default (`figures` in the config).
+
+| File | Switch | Shows |
+|---|---|---|
+| `<name>_tissue.jpg` | `figures.tissue` | the class map, one colour per class, a black line between classes, a legend |
+| `<name>_epithelium.jpg` | `figures.epithelium` | the epithelium mask the boxes come from, tinted, with a black outline |
+| `<name>_boxes.jpg` | `figures.boxes` | the epithelium as above, and over it the ROI boxes (amber); optionally annotation ROIs (lime) |
+
+`<name>` is the stem of the slide's file name (`BRACS_1003691`); the files go to `figures.dir` below `run/output`, whole or not at all.
+
+**Example** — a 1000 × 800 µm window of BRACS_1003691 (the full figures are about 50 MB each; the upper left corner of the window is at (4 150, 4 787) of the 1 µm/px figure):
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/BRACS_1003691_he.jpg" width="100%"></td>
+<td width="50%" valign="top"><img src="docs/BRACS_1003691_tissue.jpg" width="100%"></td>
+</tr>
+<tr>
+<td valign="top"><b>H&amp;E</b><br><sub>the slide, as read at 1 µm/px</sub></td>
+<td valign="top"><b>tissue</b><br><sub>TUM red, BEN orange, STR green, SEC pink, FAT cyan, VES purple, OTH dark (glass, lumen)</sub></td>
+</tr>
+</table>
+
+<img src="docs/BRACS_1003691_boxes.jpg" width="100%">
+
+**boxes** — the ROIs of the method, numbered by `local_idx`, over the epithelium (TUM ∪ BEN, holes filled, black outline).
+
+**Reading the boxes figure**
+
+- Each box of the method is an **amber** dashed rectangle. The number on the small dark label above its upper left corner is the
+  `local_idx` of the ROI in E (from 0), so a box in the figure is found in the JSON. The caption gives the number of boxes.
+- Lines are laid over the slide as a **translucent colour** (70 %) with a translucent dark edge of 1 px, so the slide shows through
+  the line and between the dashes, and the line still stands out on light and on dark tissue. Amber lies outside the hues of H&E
+  (pink, purple, blue, white).
+- Optional: `figures.annotations` is a JSON `{stain_id: [[x, y, w, h], …]}` in level-0 pixels. Those ROIs are drawn in **lime**
+  (long dashes, a pixel wider, numbered from 1) so that they stay apart from the amber boxes where they overlap; the caption
+  gives both counts. A stain without an entry gets nothing drawn. The example above has none.
+
+**Size.** By default a figure has the resolution of the segmentation, 1 µm/px (a 60 000 × 70 000 px slide gives about
+16 000 × 18 000 px, about 50 MB). `figures.downscale` makes it that many times smaller (`4` → 4 µm/px, 16 times fewer pixels); the
+segmentation and the boxes are unchanged. Colours, line width (2 px) and JPEG quality (90) are fixed.
+
+**Looking at a full-size figure.** It is too large for most viewers and web pages. Open it with a viewer for large images
+(Fiji / ImageJ, IrfanView), or cut an overview and crops where it is — inside a job, because decoding a whole figure needs several GB:
+
+```python
+import cv2
+f = "BRACS_1003691_boxes.jpg"
+# 1/8 of the size: 8 µm/px, about 2000 px
+cv2.imwrite("overview.jpg", cv2.imread(f, cv2.IMREAD_REDUCED_COLOR_8))
+# the example window above: 1000 × 800 px at 1 µm/px (rows, columns)
+cv2.imwrite("crop.jpg", cv2.imread(f)[4787:5587, 4150:5150])
 ```
 
-端到端(真實 WSI → CONCH → ROI,需 GPU 與資產;步驟與實測結果見 `examples/README.md`):
+---
 
-```bash
-SLIDE=/path/to/slide.svs PYTHON=python bash components/person_c/examples/e2e/run_e2e.sh
-```
+## 5. Code structure
 
-## 7. 環境與外部資產
-
-| 項目 | 內容 |
-|---|---|
-| 模型 | CONCH `conch_ViT-B-16`(權重 SHA-256 與授權見 `external-assets.yaml`) |
-| Python | 3.12 |
-| 主要套件 | torch 2.14.0+cu130(CUDA 13.0)、torchvision 0.29.0、timm 1.0.29、openslide-python 1.4.6、scipy 1.18.1、numpy 2.5.3(完整版本見 `requirements.txt`) |
-| CONCH 程式庫 | 隨元件發佈於 `third_party/CONCH/`:上游 `mahmoodlab/CONCH` commit `141cc09c7d4ff33d8eda562bd75169b457f71a62` 的 `conch/open_clip_custom/` 與 `LICENSE`,逐檔未修改(CC-BY-NC-ND 4.0);目錄 tree SHA-256 `9e6419e1c78f79406acf635529bfde1c4029f15acb97221d11e76345d187febd` |
-| 資產 SHA-256 | 權重 `pytorch_model.bin`:`40a9644b9ba0e83a74576e0a5e5f7313599fa9c9cdaf3c20f8a3e271b0e9ae7c`;`bcss_vocab.json`:`47ea2b920bb73dfd43e9f3b9892fab20b80e6812902a9b914b6986f13166aa62`。數值固定在 `assets.py`,執行時連同 `third_party/CONCH` 一併比對,不符即 `AssetError` 並非零結束,不寫出 E |
-| 外部資產位置 | 權重:`reference/person_c/checkpoint/conch/pytorch_model.bin`;類別描述:`reference/person_c/template_ref/bcss_vocab.json` |
-| 資產準備 | 1) 在 https://huggingface.co/MahmoodLab/CONCH 接受條款後下載 `pytorch_model.bin`(CC-BY-NC-ND,gated,不可轉散布)。2) `bcss_vocab.json`(專案自有、無使用限制)由 Drive 的 `WLW_GPintegrate Reference Assets` 提供,放在上述位置。兩者 SHA-256 與上表不符會直接失敗。CONCH 程式庫已在 repository 內,不需準備 |
-| GPU | 必要,至少 1 張;沒有 CPU fallback(`device: cuda` 但 CUDA 不可用會直接失敗)。**主機 NVIDIA driver 須 ≥ 580**(CUDA 13.0 的最低要求;低於此版本容器會在啟動階段被 `cuda>=13.0` 條件拒絕,例如 driver 535 的 RTX 4090 主機)。Docker 基底為 `nvidia/cuda:13.0.3-cudnn-runtime-ubuntu24.04`(沿用 person_e 的做法)。若目標環境 driver < 580,需改用 CUDA 12.x 基底(如 `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04`,driver ≥ 570)並改用對應 `cu128` 的 torch wheel;**此組合未 build、未驗證**。 |
-
-## 8. 實測(初版,單張 slide)
-
-| 項目 | 數值 |
-|---|---|
-| 測試 slide | BCSS 公開資料 `TCGA-AC-A6IW`,28777 × 34620 px,MPP 0.252 |
-| 環境 | Nano4 `dev` 佇列,1 張 H200,8 CPU |
-| 總時間 | 1 分 13 秒 |
-| GPU 記憶體 | 約 4.7 GB(PyTorch allocated,特徵抽取階段) |
-| CPU 記憶體(peak RSS) | 約 10.9 GB |
-| 輸出 | **2 個 ROI**,通過 schema 與 selection 語意檢查,全部在 slide 範圍內 |
-| ROI 內容 | 一個覆蓋大片腫瘤的外框(level-0 25664 × 29248 px,約佔 slide 75%;`main_info` 12935 × 14741 px),一個小外框(704 × 960 px) |
-
-再量一張大的:BRACS test `BRACS_1003691`(Group_AT / ADH),61879 × 70581 px(約 4.4 億像素,檔案 1.3GB),MPP 0.2524,同環境。
-
-| 項目 | 數值 |
-|---|---|
-| 總時間 | 3 分 36 秒 |
-| CPU 記憶體(peak RSS) | 約 42.6 GB |
-| 輸出 | 160 個 ROI(未達 256 上限),通過 schema 與 selection 語意檢查,全部在 slide 範圍內 |
-| ROI 大小(level-0 最長邊) | 中位數 1632 px,最小 416 px,最大 14080 px |
-| 佔 slide 面積 | 中位數 0.04%,最大 4.5% |
-| `main_info` 最長邊 > 4096 px 的 ROI | 4 個(最大 7108 px) |
-
-> 註:以上 ROI 大小是加入 `max_main_side_px` 之前量到的。加入後,`main_info` 最長邊上限為 2048 px,以重算驗證:BCSS smoke 從 14741 降到 2048,BRACS_1003691 從 7108 降到 2048;`level0_info` 不變。
-
-目視疊圖:框落在有組織處,背景沒有框。但曲折的組織帶外框內會包含很多空白(外接矩形的特性)。兩張 slide 的時間與記憶體隨 slide 大小增加;更大的 slide 尚未量測。
-
-### 8.1 lab_23 正式整合實測（2026-10-29）
-
-在 RTX 4090 24 GB、driver 580.178.04、Docker 29.1.3 與 94 GiB 主機 RAM 上，使用
-`configs/region_proposal.json`、正式 CONCH checkpoint 與三張 `run/input/pipeline/` MRXS 完成
-production pipeline：
-
-| Case | compact cells | accumulator | Person C 時間 | peak 指標 | ROI |
-|---|---:|---|---:|---|---:|
-| `S1202317` | 4,163,584 | `joint_gpu` | 186.810 秒 | GPU allocated 23.06 GB；host feature RSS 14.30 GB | 1 |
-| `S1226464` | 3,055,872 | `joint_gpu` | 99.467 秒 | GPU allocated 17.35 GB；host feature RSS 11.47 GB | 153 |
-| `S1129952` | 5,176,576 | `two_pass_gpu` | 317.950 秒 | mask 12.38 GB、patch 17.72 GB；host feature RSS 16.86 GB | 139 |
-
-`two_pass_gpu` 不改模型或 dtype：先以 GPU float32 accumulator 完成 512 維 mask 特徵，分塊
-正規化為 float16 host feature 並釋放 accumulator，再重新讀 WSI 完成 768 維 patch 特徵。這使
-兩個合計約 26.5 GB 的 accumulator 不必同時存在。較小案例仍採單次 joint pass。
-
-## 9. 已知限制與待辦
-
-- **演算法是初版。** `region/` 目前是 CONCH 特徵分群加 zero-shot 命名,尚未針對 WLW 的診斷項目調整,之後會替換。
-- **外接矩形可能非常大。** 腫瘤連成一個聯通元件時,`level0_info` 的外框會涵蓋大部分 slide(見第 8 節)。已用 `roi.max_main_side_px` 限制 `main_info` 的最長邊(大的 ROI 縮小看),但 `level0_info` 仍是完整外框,且外框內可能包含很多空白。是否要切分大元件,需與負責人、戊討論。
-- **ROI 數量依賴分群結果。** 外框是每個元件一個,元件很少時 ROI 很少,元件很碎時很多;`max_rois_per_stain`(預設 256)只在後者生效。
-- **ROI 規則以第 4 節為準。** 下游依第 4.1、4.2 節使用;規則變更時需更新 README 與 `component.yaml` 版本。
-- **只處理 `stain_types` 內的 stain**,預設只有 `HE`。
-- **zero-shot 詞表是 BCSS 乳腺組織。** 其他器官需要換詞表。
-- **Docker production image 已驗證。** `wlw/person-c:0.1.0-lab23-production` 已在上述環境 build，並由
-  `pipeline/run_pipeline.py` 以唯讀 `/reference`、可寫 `/run` 完成三張真實 MRXS；映像內 24 項測試通過。
-- **最低需求依正式最大峰值修正為 24 GB VRAM。** `component.yaml` 仍保留 64 GB RAM budget，涵蓋
-  先前 BRACS 的 45.7 GB peak；更大或更高 tissue coverage 的 slide 仍可能需要提高 RAM／timeout。
-- **已與丁、戊真實實作完成 round-trip。** 三案的 E 都由 Person D native PLIP+CONCH 讀取，matching
-  確實開啟；本批 ROI 因 `insufficient_visual_evidence` 沒有通過 D，因此 Person E native 程式依契約
-  回報 `skipped_no_eligible_rois`，未進行 CLEE model forward。這項資料結果不是 passthrough。
-- 輸出在固定 seed 下分群可重現,但跨 GPU 型號的數值差異未驗證。
-
-## 10. 檔案
+Two program files, each with numbered blocks, and no sub-packages.
 
 ```text
 components/person_c/
-├── interest_pattern.py       入口:CLI、stain 迴圈、組裝 E.ROIs
-├── rois.py                   polygon -> ROI 矩形、座標與 MPP 換算
-├── region/
-│   ├── proposal.py           一張 WSI -> proposal polygon(GPU)
-│   ├── preprocess.py         CONCH dense 特徵抽取(複製自 PIPELINE/ROI/utils)
-│   ├── partition.py          vMF 分群、polygon 輸出(同上)
-│   └── zeroshot.py           CONCH 文字端 zero-shot 命名(同上)
-├── configs/                  example.json、region_proposal.json、README.md
-├── third_party/CONCH/        上游 CONCH 的 open_clip_custom 與 LICENSE(未修改)
-├── assets.py                 資產 SHA-256 固定值與執行前檢查
-├── examples/                 canonical example(case、proposal polygon、預期 E)與 e2e/ 端到端腳本
-├── tests/                    test_interest_pattern.py
-├── component.yaml            版本與環境需求
-├── external-assets.yaml      外部資產清單(SHA-256、授權)
-├── requirements.txt
-├── Dockerfile                (nvidia/cuda 13.0.3 + venv;production image 與三案例已驗證)
-├── PREPARATION.md            交付檢查表(上游提供)
-└── README.md                 本文件
+├── interest_pattern.py     what the pipeline sees              no torch: the contract tests need no GPU
+│     1 Settings   the config, every key checked here
+│     2 Boxes      epithelium mask → level-0 boxes
+│     3 ROI        level0_info / main_info of a box, roi_id, selection history
+│     4 Case       CaseList → E, one H&E stain after the other
+│     5 CLI
+├── segmentation.py         what the student does               torch, OpenSlide, OpenCV
+│     1 Network    DeepLab v3+ (inference copy of PIPELINE/SEGNET's SegNet)
+│     2 Student    checkpoint check and loading, window prediction
+│     3 Slide      tiles read by worker processes, class map, epithelium mask
+│     4 Figures    the JPEG of a stage
+├── configs/        region_proposal.json  example.json  README.md
+├── examples/       case_list.valid.json  E_rois.expected.json
+├── tests/          test_person_c.py
+└── README.md  PREPARATION.md  component.yaml  external-assets.yaml  requirements.txt  Dockerfile
 ```
 
-## 11. 變更紀錄
+```text
+interest_pattern.main
+  └─ run(source, config)
+       ├─ validate_settings(config)                        every key checked here, nowhere else
+       ├─ segmentation.load_model(settings)                checkpoint path, SHA-256, classes
+       └─ per H&E stain, per WSI
+            ├─ slide_mpp(slide)
+            ├─ segmentation.infer_stages(path, slide, …)   → tissue, epithelium, classes [, image]
+            ├─ level0_boxes(epithelium, …) → drop_enclosed(boxes)
+            ├─ _make_roi(…)                                level-0 and main_info records
+            └─ segmentation.save_figures(…)                only if a switch is on
+```
 
-| 版本 | 內容 |
+| Step | Runs on | Note |
+|---|---|---|
+| Reading tiles | 6 CPU processes (`TileReader`, one slide handle each) | the slowest part; the GPU predicts the previous tile meanwhile |
+| Windows, enlarging, argmax, label map, union of classes | GPU | per-pixel work |
+| Hole filling, connected objects | CPU (OpenCV) | one pass over the mask, about 1 s |
+| Painting of the figures | GPU, in bands of 1024 rows | blending and outline per pixel |
+| JPEG encoding | CPU threads, one per figure | |
+
+**Rules for changes**
+
+- Every config key is validated in `validate_settings` and documented in `configs/README.md`; a new key is added to both and to a test.
+- `interest_pattern.py` never imports torch at module level (`segmentation` is imported only when a slide is processed).
+- The ROI geometry (section 3) is what Person D and E rely on: a change to it is a contract question, not a code cleanup.
+- The network class in `segmentation.py` keeps the module names of PIPELINE/SEGNET's `SegNet`: the checkpoint is loaded with strict key checking.
+
+---
+
+## 6. Environment and performance
+
+| Item | Value |
 |---|---|
-| 0.1.0(lab_23 integration) | 大型 WSI accumulator 自動在 joint／two-pass GPU 間切換；最終 weighted mean 與正規化分塊搬到 host；surrounding pooling 改為 sparse chunk；vMF chunk 上限實際傳入 spherical k-means。RTX 4090 完成三案例 production pipeline。 |
-| 0.1.0(review 第一輪修正) | 測試改用 `examples/` 內的 fixture;CONCH 固定到 `141cc09`;執行前檢查 checkpoint、library、詞表的 SHA-256;詞表改隨元件發佈;新增端到端腳本與 driver 需求說明。 |
-| 0.1.0 | 第一版可跑通:CONCH 區域提案(`region/`)加聯通元件外接矩形 ROI(`rois.py`),`mode: region_proposal`;`mode: example` 保留契約空殼。ROI 的 `main_info` 最長邊上限 `roi.max_main_side_px`。已在 2 張真實 slide 上驗證(第 8 節)。 |
+| Python | 3.10 in the image; the development runs used 3.12 |
+| Framework | `torch 2.6.0`, `torchvision 0.21.0` (cu118 wheels) in the image; development runs: torch 2.14.0, CUDA 13.0 |
+| WSI | `openslide-python 1.4.6` (any format OpenSlide reads that carries MPP; SVS was used) |
+| Other | `numpy`, `opencv-python-headless`; `scipy` only in one test |
+| GPU | one; peak memory 1.05 GiB measured during inference (one network, 32 windows per pass) |
+| CPU | 8 (6 tile readers and the main process) |
+| Checkpoint | `reference/person_c/checkpoint/segnet/c9_sclip_bracs_s0.pt`, 238 008 769 bytes, SHA-256 `b13895d5cf7ca919cb6b78e43931a5e9174f7305573964c3ed1ac5cea5b3e95b` |
+
+External assets (the checkpoint, a test slide) are listed with digests in `external-assets.yaml`. Nothing is downloaded at build or
+run time; `reference/` is read-only and everything the component writes goes below `run/`.
+
+**Measured** on one H200 with 8 CPUs, BRACS slides (SVS, 0.2524 µm/px), `configs/region_proposal.json`:
+
+| Slide | Run | Time | Peak host memory | ROIs |
+|---|---|---|---|---|
+| BRACS_1003694 | CLI, no figures | 37 s | 7.3 GB | 40 |
+| BRACS_1003691 (61 879 × 70 581 px) | student, label map, holes, boxes (model loaded) | 20 s | | 152 |
+| BRACS_1003691 | the same plus three figures | 32 s | | 152 |
+| 9 slides of 0.7 to 2.4 GB | CLI, three figures | 32 to 69 s each | 15.7 GB (largest) | 5 to 203 |
+
+The memory of a run with figures is mostly the slide image and the three figures at 1 µm/px.
+
+---
+
+## 7. Limits and notes
+
+**Limits**
+
+- **The ROIs are not scored.** The segmentation and the boxes were looked at in figures of a sample of BRACS slides; no ROI was compared
+  with an annotation by a number. The student's own scores are in PIPELINE/SEGNET.
+- **The student was trained on BRACS slides** (breast): a BRACS slide is not an independent test, and slides from other sites or
+  organs may be segmented worse.
+- **A box is axis-aligned.** An elongated or diagonal object gets a box that is mostly empty; overlapping boxes of neighbouring
+  objects are kept; a tumour that infiltrates in single cells gives many small boxes. `coords_seg` is `null`.
+- **A ring that is not closed is not filled**, so a gland whose wall has a gap keeps its lumen outside the mask.
+- **Deterministic** for a given checkpoint (an argmax, no sampling); differences between GPU models were not checked.
+- **Very large slides.** A figure above 2³¹ bytes of pixels is written in BGR order (an RGB→BGR copy of such an image gave black files).
+  Slides above about 1 gigapixel at 1 µm/px were not tried.
+- **Not run:** the container image, the full pipeline (the reference assets of Person A and E were not at hand), and Person D / E
+  reading these ROIs.
+
+**Notes for the pipeline** — nothing outside `components/person_c/` was changed.
+
+- `mode: "region_proposal"` names the stage. The algorithm behind it is now SEGNET, not the CONCH proposal that PR #1 delivered; the
+  CONCH code and checkpoint are not needed any more, and `pipeline/run_pipeline.py` needs no change.
+- `reference/person_c/checkpoint/segnet/c9_sclip_bracs_s0.pt` must exist in the mounted `reference/`.
+- The pipeline's image tag for C is `wlw/person-c:0.1.0-lab23-production`; this component is `0.5.0`.
+- `payload.reference_versions.interest_pattern` of E has new content (it recorded the CONCH region settings before), and the ROIs
+  differ from the earlier ones in number and shape (epithelium objects, not CONCH regions).
+- `components/person_d/examples/person_c_integration/README.md` calls `build_region_artifact`, which is PR #1's code (commit `0ad461d`).
+
+---
+
+## 8. Changelog
+
+| Version | Change |
+|---|---|
+| **0.5.0** | The SEGNET student replaces the CONCH region proposal (and the MRCPS segmentation before it; both stay in git history). `mode` replaces `backend`; `configs/region_proposal.json` and `configs/example.json` are the names the pipeline reads. Segmentation at 1 µm/px, per-pixel work on the GPU, tiles read by worker processes, JPEG figures of the stages with optional annotation ROIs, E records its provenance. Two program files. |
+| 0.4.0 | MRCPS extractor and example mode (upstream). |

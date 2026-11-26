@@ -1,20 +1,18 @@
-name: person_c_interest_pattern
+name: interest_pattern_extraction
 owner: person_C
-version: 0.1.0
+version: 0.5.0
 inputs: [CaseListInput@1.0]
 outputs: [E.ROIs@2.0]
 runtime:
-  python: "3.12"
-  cuda: "13.0"
-  min_nvidia_driver: "580"   # CUDA 13.0 requirement; older drivers need a CUDA 12.x base (README section 7)
+  python: "3.10"
   gpu: true
-  gpu_count_min: 1
-  vram_gb_min: 24        # lab_23 RTX 4090: joint peak 23.06 GB allocated; large WSI auto-selects two-pass accumulation
-  cpu: 8                 # job used 8 CPUs
-  memory_gb: 64          # measured peak RSS 45.7 GB (61879x70581 slide), 10.9 GB (28777x34620)
-  timeout_seconds: null  # 5 min 4 s (61879x70581) and 73 s (28777x34620) measured; larger slides not measured
+  cuda_runtime: "11.8 via PyTorch 2.6.0 wheel"
+  minimum_vram_gb: 2        # measured peak 1.05 GiB (one network, 32 windows per pass)
+  cpu: 8                    # 6 tile-reading workers + the main process
+  memory_gb: 32             # measured peak host memory 7.3 GB (no figures) to 15.7 GB (three figures, a 22000 x 33000 px slide at 1 um/px)
+  timeout_seconds: 1800     # measured 34 to 106 s per slide (0.7 to 2.4 GB files)
 models:
-  - name: conch_ViT-B-16
-    configured_by: configs/region_proposal.json:region.conch_checkpoint
+  - name: segnet-c9-sclip-bracs-s0
+    revision: sha256:b13895d5cf7ca919cb6b78e43931a5e9174f7305573964c3ed1ac5cea5b3e95b
+    configured_by: configs/region_proposal.json:segnet.checkpoint
 entrypoint: python -m components.person_c.interest_pattern
-status: integration_validated   # production region_proposal completed the three-case lab_23 Docker pipeline
